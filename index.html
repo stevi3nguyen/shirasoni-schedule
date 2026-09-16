@@ -1,0 +1,1900 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shirasoni Schedule</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+<!-- Firebase (compat/UMD builds so this works as plain <script> tags, no build step) -->
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+
+<!-- jsPDF for the PDF export -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --bg-elevated: #161616;
+    --bg-elevated-2: #1f1f1f;
+    --border: #2a2a2a;
+    --text: #f2f2f2;
+    --text-secondary: #9a9a9a;
+    --text-tertiary: #6b6b6b;
+    --accent: #e8491d;
+    --accent-dim: rgba(232, 73, 29, 0.16);
+    --green: #22c55e;
+    --red: #ef4444;
+    --orange: #f97316;
+    --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    -webkit-font-smoothing: antialiased;
+  }
+  button { font-family: var(--font); cursor: pointer; }
+  input, select, textarea { font-family: var(--font); }
+  a { color: inherit; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+
+  #root { min-height: 100vh; }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 10px 16px; border-radius: 10px; border: none;
+    font-size: 14px; font-weight: 600; transition: opacity .15s;
+  }
+  .btn:hover { opacity: 0.88; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-secondary { background: var(--bg-elevated-2); color: var(--text); border: 1px solid var(--border); }
+  .btn-danger { background: rgba(239,68,68,0.15); color: var(--red); }
+  .btn-ghost { background: transparent; color: var(--text-secondary); }
+  .btn-sm { padding: 6px 12px; font-size: 13px; }
+  .btn-block { width: 100%; }
+
+  .input {
+    width: 100%; padding: 11px 13px; border-radius: 10px;
+    background: var(--bg-elevated-2); border: 1px solid var(--border);
+    color: var(--text); font-size: 14px; outline: none;
+  }
+  .input:focus { border-color: var(--accent); }
+  .label { font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block; }
+
+  .card { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 14px; }
+
+  .chip {
+    padding: 7px 14px; border-radius: 999px; font-size: 13px; font-weight: 600;
+    background: var(--bg-elevated-2); color: var(--text); border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .chip.active { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px;
+  }
+  .modal {
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 16px;
+    width: 100%; max-width: 460px; max-height: 88vh; overflow-y: auto;
+  }
+
+  .badge { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+
+  table.grid-table { border-collapse: collapse; width: 100%; }
+  table.grid-table th, table.grid-table td { border: 1px solid var(--border); }
+  table.grid-table th { background: var(--bg-elevated-2); padding: 8px 6px; font-size: 12px; text-align: center; position: sticky; top: 0; z-index: 2; }
+  table.grid-table td { padding: 4px; vertical-align: top; }
+  .name-cell { position: sticky; left: 0; background: var(--bg-elevated); z-index: 1; font-weight: 600; padding: 8px 10px !important; text-align: left; white-space: nowrap; }
+  table.grid-table th.name-header { position: sticky; left: 0; top: 0; z-index: 3; text-align: left; }
+
+  .section-row td { background: var(--bg-elevated-2); font-size: 11px; font-weight: 700; letter-spacing: 0.04em; color: var(--text-secondary); padding: 6px 10px !important; text-transform: uppercase; }
+
+  .shift-chip {
+    display: block; width: 100%; padding: 5px 4px; border-radius: 6px; text-align: center;
+    font-size: 12px; font-weight: 700; cursor: pointer; border: 1px solid transparent;
+  }
+  .add-slot {
+    display: block; width: 100%; padding: 5px 4px; border-radius: 6px; text-align: center;
+    font-size: 11px; color: var(--text-tertiary); border: 1px dashed var(--border); cursor: pointer;
+    min-height: 16px;
+  }
+  .add-slot:hover { border-color: var(--accent); color: var(--accent); }
+
+  .tabbar {
+    position: fixed; bottom: 0; left: 0; right: 0; background: rgba(20,20,20,0.92);
+    backdrop-filter: blur(12px); border-top: 1px solid var(--border);
+    display: flex; z-index: 50; padding-bottom: env(safe-area-inset-bottom);
+  }
+  .tab-item {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+    padding: 10px 4px 8px; color: var(--text-tertiary); font-size: 11px; font-weight: 600;
+    background: none; border: none; position: relative;
+  }
+  .tab-item.active { color: var(--accent); }
+  .tab-badge {
+    position: absolute; top: 4px; right: calc(50% - 20px); background: var(--red); color: white;
+    font-size: 10px; font-weight: 700; min-width: 16px; height: 16px; border-radius: 999px;
+    display: flex; align-items: center; justify-content: center; padding: 0 3px;
+  }
+
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 20px 10px; gap: 12px; flex-wrap: wrap;
+  }
+  .page-title { font-size: 26px; font-weight: 800; margin: 0; }
+
+  .content { padding: 0 20px 90px; max-width: 1400px; margin: 0 auto; }
+
+  ::placeholder { color: var(--text-tertiary); }
+
+  @media (max-width: 640px) {
+    table.grid-table { font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+// ============================================================================
+// FIREBASE SETUP — same project as the iOS app, so this is the same live data.
+// ============================================================================
+const firebaseConfig = {
+  apiKey: "AIzaSyA_06sen_u_3kvZ4OmsxwzSvYVdlKuDVkc",
+  authDomain: "shirasoni-schedule.firebaseapp.com",
+  projectId: "shirasoni-schedule",
+  storageBucket: "shirasoni-schedule.firebasestorage.app",
+  messagingSenderId: "1084268857358",
+  appId: "1:1084268857358:web:5b617f10271aa12798945f",
+  measurementId: "G-DL9YSWZL0Z"
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+// ============================================================================
+// ROLE CONFIG — mirrors EmployeeRole in the iOS app exactly.
+// ============================================================================
+const ALL_ROLES = ['Server','Sushi Server','Host','Sushi Chef','Teppanyaki Chef','Kitchen','Bartender','Dishwasher/Busser','Manager'];
+const SELECTABLE_ROLES = ALL_ROLES.filter(r => r !== 'Manager'); // Manager isn't a selectable shift/profile role — it's the isManager flag
+const SECTION_ORDER = ['Server','Host','Teppanyaki Chef','Sushi Chef','Kitchen','Bartender','Dishwasher/Busser','Manager'];
+const ROLE_COLORS = {
+  'Server': '#3b82f6',
+  'Sushi Server': '#06b6d4',
+  'Host': '#a855f7',
+  'Sushi Chef': '#f97316',
+  'Teppanyaki Chef': '#ec4899',
+  'Kitchen': '#92400e',
+  'Bartender': '#22c55e',
+  'Dishwasher/Busser': '#8b8b8b',
+  'Manager': '#6366f1',
+};
+function sectionRole(role) { return role === 'Sushi Server' ? 'Server' : role; }
+function roleColor(role) { return ROLE_COLORS[role] || '#8b8b8b'; }
+const MAX_SHIFTS_PER_DAY = 2;
+
+// ============================================================================
+// GLOBAL STATE
+// ============================================================================
+const state = {
+  authReady: false,
+  user: null,
+  employee: null,          // current signed-in employee doc {id,...}
+  employees: [],
+  shifts: [],
+  timeOffRequests: [],
+  swapRequests: [],
+  authError: null,
+  authMode: 'signin',      // 'signin' | 'signup'
+
+  tab: 'schedule',         // schedule | requests | build | approvals | profile
+
+  schedule: { anchorDate: startOfWeekMonday(new Date()), roleFilter: null, viewMode: 'grid' },
+  build:    { anchorDate: startOfWeekMonday(new Date()), roleFilter: null, viewMode: 'grid', copyMsg: null },
+  approvals:{ viewMode: 'list', calAnchorDate: startOfWeekMonday(new Date()) },
+
+  modals: {
+    shiftEditor: null,     // { date, existingShift, presetEmployee }
+    shiftEditorForm: {},
+    shiftDetail: null,     // shift being viewed (staff read-only)
+    addStaff: null,        // { existingEmployee } or {} for add
+    staffForm: {},
+    editName: false,
+    editNameValue: '',
+    timeOff: false,
+    timeOffForm: {},
+    swap: false,
+    swapForm: {},
+    timeOffDetail: null,   // request for manager approval detail
+    colorLegend: false,
+    confirm: null,         // { title, message, confirmLabel, danger, onConfirm }
+  },
+};
+
+// ============================================================================
+// DATE / FORMAT HELPERS
+// ============================================================================
+function startOfWeekMonday(d) {
+  const date = new Date(d);
+  const day = date.getDay();
+  const diff = (day === 0 ? -6 : 1 - day);
+  date.setDate(date.getDate() + diff);
+  date.setHours(0,0,0,0);
+  return date;
+}
+function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
+function getWeekDates(anchor) {
+  const monday = startOfWeekMonday(anchor);
+  return Array.from({length:7}, (_,i)=> addDays(monday, i));
+}
+function isSameDay(a,b){
+  if (!a || !b) return false;
+  return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
+}
+function toDate(x) {
+  if (!x) return null;
+  if (x instanceof Date) return x;
+  if (x.toDate) return x.toDate();
+  return new Date(x);
+}
+function formatTime(date) {
+  if (!date) return '';
+  let h = date.getHours();
+  const m = date.getMinutes();
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${String(m).padStart(2,'0')}`;
+}
+function formatDateShort(date) {
+  return date.toLocaleDateString('en-US', { month:'short', day:'numeric'});
+}
+function formatDateFull(date) {
+  return date.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', year:'numeric' });
+}
+function weekdayAbbr(date){ return date.toLocaleDateString('en-US', {weekday:'short'}); }
+function weekRangeLabel(weekDates) {
+  return `${formatDateShort(weekDates[0])} – ${formatDateShort(weekDates[6])}`;
+}
+function uuid() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random()*16|0, v = c === 'x' ? r : (r&0x3|0x8);
+    return v.toString(16);
+  });
+}
+function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ============================================================================
+// AUTH
+// ============================================================================
+let unsubEmployeeListener = null;
+let unsubDataListeners = [];
+
+async function signUp(email, password, name, phone, role) {
+  state.authError = null;
+  try {
+    const cred = await auth.createUserWithEmailAndPassword(email, password);
+    // Document ID is deliberately the Auth UID (not an auto ID) — matches the
+    // iOS app's convention so Firestore rules (isManager() lookup) work correctly.
+    await db.collection('employees').doc(cred.user.uid).set({
+      authUID: cred.user.uid,
+      name, phone, role,
+      isManager: false, // manager status can only be granted by an existing manager, never at signup
+      active: true,
+    });
+  } catch (e) {
+    state.authError = e.message;
+    render();
+  }
+}
+async function signIn(email, password) {
+  state.authError = null;
+  try {
+    await auth.signInWithEmailAndPassword(email, password);
+  } catch (e) {
+    state.authError = e.message;
+    render();
+  }
+}
+function signOut() {
+  auth.signOut();
+}
+
+function loadCurrentEmployee(uid) {
+  if (unsubEmployeeListener) unsubEmployeeListener();
+  unsubEmployeeListener = db.collection('employees').where('authUID', '==', uid)
+    .onSnapshot(async (snap) => {
+      if (snap.empty) { state.employee = null; render(); return; }
+      const docSnap = snap.docs[0];
+      state.employee = { id: docSnap.id, ...docSnap.data() };
+      render();
+      // One-time self-repair: if this doc's ID doesn't match the Auth UID,
+      // isManager() lookups in the Firestore rules can never find it. Copy
+      // to the correctly-keyed doc, then remove the old one.
+      if (docSnap.id !== uid) {
+        try {
+          await db.collection('employees').doc(uid).set(docSnap.data());
+          await db.collection('employees').doc(docSnap.id).delete();
+        } catch (e) { console.warn('employee doc migration failed', e); }
+      }
+    }, (err) => console.error('employee listener error', err));
+}
+
+function startDataListeners() {
+  stopDataListeners();
+  unsubDataListeners.push(
+    db.collection('employees').onSnapshot(snap => {
+      state.employees = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      render();
+    }, err => console.error(err))
+  );
+  unsubDataListeners.push(
+    db.collection('shifts').orderBy('startTime').onSnapshot(snap => {
+      state.shifts = snap.docs.map(d => {
+        const data = d.data();
+        return { id: d.id, ...data, date: toDate(data.date), startTime: toDate(data.startTime) };
+      });
+      render();
+    }, err => console.error(err))
+  );
+  unsubDataListeners.push(
+    db.collection('timeOffRequests').orderBy('createdAt', 'desc').onSnapshot(snap => {
+      state.timeOffRequests = snap.docs.map(d => {
+        const data = d.data();
+        return { id: d.id, ...data, startDate: toDate(data.startDate), endDate: toDate(data.endDate), createdAt: toDate(data.createdAt) };
+      });
+      render();
+    }, err => console.error(err))
+  );
+  unsubDataListeners.push(
+    db.collection('swapRequests').orderBy('createdAt', 'desc').onSnapshot(snap => {
+      state.swapRequests = snap.docs.map(d => {
+        const data = d.data();
+        return { id: d.id, ...data, createdAt: toDate(data.createdAt) };
+      });
+      render();
+    }, err => console.error(err))
+  );
+}
+function stopDataListeners() {
+  unsubDataListeners.forEach(fn => fn());
+  unsubDataListeners = [];
+}
+
+auth.onAuthStateChanged(user => {
+  state.authReady = true;
+  state.user = user;
+  if (user) {
+    loadCurrentEmployee(user.uid);
+    startDataListeners();
+  } else {
+    state.employee = null;
+    state.employees = []; state.shifts = []; state.timeOffRequests = []; state.swapRequests = [];
+    stopDataListeners();
+    if (unsubEmployeeListener) { unsubEmployeeListener(); unsubEmployeeListener = null; }
+  }
+  render();
+});
+
+// ============================================================================
+// SHIFTS
+// ============================================================================
+async function addShift(shift) {
+  await db.collection('shifts').add(shift);
+}
+async function updateShift(id, shift) {
+  await db.collection('shifts').doc(id).update(shift);
+}
+async function deleteShift(id) {
+  await db.collection('shifts').doc(id).delete();
+}
+
+function employeeMatchesRoleFilter(employee, roleFilter) {
+  if (!roleFilter) return true;
+  return sectionRole(employee.role) === sectionRole(roleFilter);
+}
+
+async function publishDraftShifts(weekDates, roleFilter) {
+  const matchingIds = roleFilter
+    ? new Set(state.employees.filter(e => employeeMatchesRoleFilter(e, roleFilter)).map(e => e.id))
+    : null;
+  const drafts = state.shifts.filter(s =>
+    !s.published &&
+    weekDates.some(d => isSameDay(d, s.date)) &&
+    (!matchingIds || matchingIds.has(s.employeeId))
+  );
+  if (!drafts.length) return 0;
+  const batch = db.batch();
+  drafts.forEach(s => batch.update(db.collection('shifts').doc(s.id), { published: true }));
+  await batch.commit();
+  return drafts.length;
+}
+async function publishAllDraftShifts() {
+  const drafts = state.shifts.filter(s => !s.published);
+  if (!drafts.length) return 0;
+  const batch = db.batch();
+  drafts.forEach(s => batch.update(db.collection('shifts').doc(s.id), { published: true }));
+  await batch.commit();
+  return drafts.length;
+}
+async function copyPreviousWeek(currentWeekStart) {
+  const prevStart = addDays(currentWeekStart, -7);
+  const prevEnd = addDays(prevStart, 7);
+  const prevShifts = state.shifts.filter(s => s.date >= prevStart && s.date < prevEnd);
+  for (const s of prevShifts) {
+    const newDate = addDays(s.date, 7);
+    const newStart = addDays(s.startTime, 7);
+    await addShift({
+      employeeId: s.employeeId, employeeName: s.employeeName, role: s.role,
+      date: newDate, startTime: newStart, notes: s.notes || '', published: false,
+    });
+  }
+  return prevShifts.length;
+}
+async function clearShifts(weekDates) {
+  const toDelete = state.shifts.filter(s => weekDates.some(d => isSameDay(d, s.date)));
+  if (!toDelete.length) return 0;
+  const batch = db.batch();
+  toDelete.forEach(s => batch.delete(db.collection('shifts').doc(s.id)));
+  await batch.commit();
+  return toDelete.length;
+}
+
+// ============================================================================
+// TIME OFF REQUESTS
+// ============================================================================
+async function submitTimeOffRequest(req) {
+  await db.collection('timeOffRequests').add({ ...req, status: 'Pending', createdAt: new Date(), managerNote: '' });
+}
+async function updateTimeOffStatus(id, status, managerNote) {
+  await db.collection('timeOffRequests').doc(id).update({ status, managerNote: managerNote || '' });
+}
+async function cancelTimeOffRequest(id) {
+  await db.collection('timeOffRequests').doc(id).update({ status: 'Cancelled' });
+}
+async function deleteTimeOffRequest(id) {
+  await db.collection('timeOffRequests').doc(id).delete();
+}
+
+// ============================================================================
+// SWAP REQUESTS
+// ============================================================================
+async function submitSwapRequest(req) {
+  await db.collection('swapRequests').add({ ...req, status: 'Waiting on Coworker', createdAt: new Date(), managerNote: '' });
+}
+async function respondToSwapAsCoworker(id, accept) {
+  await db.collection('swapRequests').doc(id).update({ status: accept ? 'Waiting on Manager' : 'Denied' });
+}
+async function respondToSwapAsManager(req, approve) {
+  await db.collection('swapRequests').doc(req.id).update({ status: approve ? 'Approved' : 'Denied' });
+  if (approve) {
+    const shift = state.shifts.find(s => s.id === req.shiftId);
+    if (shift) {
+      await updateShift(shift.id, { employeeId: req.coveringEmployeeId, employeeName: req.coveringEmployeeName });
+    }
+  }
+}
+async function cancelSwapRequest(req) {
+  if (req.status === 'Approved') return;
+  await db.collection('swapRequests').doc(req.id).update({ status: 'Cancelled' });
+}
+async function deleteSwapRequest(id) {
+  await db.collection('swapRequests').doc(id).delete();
+}
+
+// ============================================================================
+// EMPLOYEES
+// ============================================================================
+async function addEmployee(name, role, isManager) {
+  await db.collection('employees').add({
+    authUID: 'manual-' + uuid(), name, phone: '', role, isManager: !!isManager, active: true,
+  });
+}
+async function updateEmployee(id, name, role, isManager) {
+  await db.collection('employees').doc(id).update({ name, role, isManager: !!isManager });
+}
+async function deleteEmployee(id) {
+  await db.collection('employees').doc(id).delete();
+}
+async function updateMyName(name) {
+  if (!state.employee) return;
+  const trimmed = (name || '').trim();
+  if (!trimmed) return;
+  await db.collection('employees').doc(state.employee.id).update({ name: trimmed });
+}
+
+// ============================================================================
+// ICONS (small inline SVGs, no external icon font needed)
+// ============================================================================
+const ICONS = {
+  calendar: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>`,
+  mail: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 7 10 6 10-6"/></svg>`,
+  edit: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg>`,
+  check: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>`,
+  user: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>`,
+  info: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>`,
+  grid: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>`,
+  list: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>`,
+  chevLeft: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m15 18-6-6 6-6"/></svg>`,
+  chevRight: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m9 18 6-6-6-6"/></svg>`,
+  plus: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>`,
+  more: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>`,
+  trash: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></svg>`,
+  sun: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`,
+  swap: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m17 2 4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3"/></svg>`,
+  logo: `<svg width="28" height="28" viewBox="0 0 24 24"><circle cx="12" cy="12" r="12" fill="#0a0a0a"/><path d="M9 8c0-1.5 1-3 3-3s3 1.5 3 3v3H9V8Z" fill="#e8491d"/><circle cx="12" cy="14" r="4" fill="white"/></svg>`,
+};
+
+// ============================================================================
+// RENDER DISPATCH
+// ============================================================================
+function render() {
+  const root = document.getElementById('root');
+  if (!state.authReady) {
+    root.innerHTML = `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;color:var(--text-tertiary)">Loading…</div>`;
+    return;
+  }
+  if (!state.user || !state.employee) {
+    root.innerHTML = state.user && !state.employee
+      ? `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;color:var(--text-tertiary)">Loading your profile…</div>`
+      : renderAuthScreen();
+    attachAuthHandlers();
+    return;
+  }
+  root.innerHTML = renderApp();
+  attachAppHandlers();
+}
+
+function renderAuthScreen() {
+  const isSignup = state.authMode === 'signup';
+  return `
+  <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;">
+    <div style="width:100%;max-width:380px;">
+      <div style="text-align:center;margin-bottom:28px;">
+        <div style="display:inline-flex;width:56px;height:56px;border-radius:50%;background:#0a0a0a;border:2px solid var(--border);align-items:center;justify-content:center;margin-bottom:14px;">
+          ${ICONS.logo}
+        </div>
+        <h1 style="font-size:26px;font-weight:800;margin:0 0 4px;">Shirasoni</h1>
+        <p style="color:var(--text-secondary);margin:0;font-size:14px;">Staff Schedule</p>
+      </div>
+
+      ${!isSignup ? `
+        <div class="card" style="padding:20px;">
+          <label class="label">Email</label>
+          <input class="input" id="auth-email" type="email" placeholder="you@example.com" style="margin-bottom:14px;" autocomplete="username">
+          <label class="label">Password</label>
+          <input class="input" id="auth-password" type="password" placeholder="••••••••" style="margin-bottom:18px;" autocomplete="current-password">
+          ${state.authError ? `<p style="color:var(--red);font-size:13px;margin:0 0 14px;">${escapeHtml(state.authError)}</p>` : ''}
+          <button class="btn btn-primary btn-block" id="btn-signin">Sign In</button>
+          <button class="btn btn-ghost btn-block" id="btn-goto-signup" style="margin-top:10px;">New here? Create an account</button>
+        </div>
+      ` : `
+        <div class="card" style="padding:20px;">
+          <label class="label">Full name</label>
+          <input class="input" id="su-name" type="text" style="margin-bottom:12px;">
+          <label class="label">Phone</label>
+          <input class="input" id="su-phone" type="tel" style="margin-bottom:12px;">
+          <label class="label">Role</label>
+          <select class="input" id="su-role" style="margin-bottom:16px;">
+            ${SELECTABLE_ROLES.map(r => `<option value="${r}">${r}</option>`).join('')}
+          </select>
+          <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 16px;">A manager can give you manager access afterward, if needed — it's not something you can set for yourself here.</p>
+          <label class="label">Email</label>
+          <input class="input" id="su-email" type="email" style="margin-bottom:12px;" autocomplete="username">
+          <label class="label">Password (6+ characters)</label>
+          <input class="input" id="su-password" type="password" style="margin-bottom:18px;" autocomplete="new-password">
+          ${state.authError ? `<p style="color:var(--red);font-size:13px;margin:0 0 14px;">${escapeHtml(state.authError)}</p>` : ''}
+          <button class="btn btn-primary btn-block" id="btn-signup">Create Account</button>
+          <button class="btn btn-ghost btn-block" id="btn-goto-signin" style="margin-top:10px;">Back to sign in</button>
+        </div>
+      `}
+    </div>
+  </div>`;
+}
+
+function attachAuthHandlers() {
+  const $ = id => document.getElementById(id);
+  if (state.authMode === 'signin') {
+    $('btn-signin')?.addEventListener('click', () => signIn($('auth-email').value.trim(), $('auth-password').value));
+    $('btn-goto-signup')?.addEventListener('click', () => { state.authMode = 'signup'; state.authError = null; render(); });
+    $('auth-password')?.addEventListener('keydown', e => { if (e.key === 'Enter') $('btn-signin').click(); });
+  } else {
+    $('btn-signup')?.addEventListener('click', () => signUp(
+      $('su-email').value.trim(), $('su-password').value, $('su-name').value.trim(), $('su-phone').value.trim(), $('su-role').value
+    ));
+    $('btn-goto-signin')?.addEventListener('click', () => { state.authMode = 'signin'; state.authError = null; render(); });
+  }
+}
+
+// ============================================================================
+// APP SHELL + TAB BAR
+// ============================================================================
+function pendingResponseCount() {
+  const myId = state.employee?.id;
+  if (!myId) return 0;
+  return state.swapRequests.filter(s => s.status === 'Waiting on Coworker' && s.coveringEmployeeId === myId).length;
+}
+function pendingApprovalCount() {
+  const pendingTimeOff = state.timeOffRequests.filter(r => r.status === 'Pending').length;
+  const pendingSwaps = state.swapRequests.filter(s => s.status === 'Waiting on Manager').length;
+  return pendingTimeOff + pendingSwaps;
+}
+
+function renderApp() {
+  const isManager = !!state.employee?.isManager;
+  let body = '';
+  if (state.tab === 'schedule') body = renderScheduleTab();
+  else if (state.tab === 'requests') body = renderRequestsTab();
+  else if (state.tab === 'build' && isManager) body = renderBuildTab();
+  else if (state.tab === 'approvals' && isManager) body = renderApprovalsTab();
+  else if (state.tab === 'profile') body = renderProfileTab();
+  else if (state.tab === 'manageStaff' && isManager) body = renderManageStaffTab();
+  else body = renderScheduleTab();
+
+  const reqBadge = pendingResponseCount();
+  const apprBadge = pendingApprovalCount();
+
+  return `
+    <div>
+      ${body}
+    </div>
+    <div class="tabbar">
+      <button class="tab-item ${state.tab==='schedule'?'active':''}" data-tab="schedule">
+        ${ICONS.calendar}<span>Schedule</span>
+      </button>
+      <button class="tab-item ${state.tab==='requests'?'active':''}" data-tab="requests">
+        ${reqBadge > 0 ? `<span class="tab-badge">${reqBadge}</span>` : ''}
+        ${ICONS.mail}<span>Requests</span>
+      </button>
+      ${isManager ? `
+        <button class="tab-item ${state.tab==='build'?'active':''}" data-tab="build">
+          ${ICONS.edit}<span>Build</span>
+        </button>
+        <button class="tab-item ${state.tab==='approvals'?'active':''}" data-tab="approvals">
+          ${apprBadge > 0 ? `<span class="tab-badge">${apprBadge}</span>` : ''}
+          ${ICONS.check}<span>Approvals</span>
+        </button>
+      ` : ''}
+      <button class="tab-item ${state.tab==='profile'?'active':''}" data-tab="profile">
+        ${ICONS.user}<span>Profile</span>
+      </button>
+    </div>
+    ${renderModals()}
+  `;
+}
+
+function attachAppHandlers() {
+  document.querySelectorAll('[data-tab]').forEach(el => {
+    el.addEventListener('click', () => { state.tab = el.dataset.tab; render(); });
+  });
+  attachScheduleHandlers();
+  attachBuildHandlers();
+  attachRequestsHandlers();
+  attachApprovalsHandlers();
+  attachProfileHandlers();
+  attachManageStaffHandlers();
+  attachModalHandlers();
+}
+
+// ============================================================================
+// SCHEDULE TAB (staff-facing, read-only)
+// ============================================================================
+function renderScheduleTab() {
+  const s = state.schedule;
+  const weekDates = getWeekDates(s.anchorDate);
+  return `
+    <div class="topbar">
+      <div style="display:flex;align-items:center;gap:10px;">
+        ${ICONS.logo}
+        <h1 class="page-title" style="font-size:22px;">Schedule</h1>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-secondary btn-sm" id="sched-info-btn">${ICONS.info}</button>
+        <button class="btn btn-secondary btn-sm" id="sched-viewmode-btn">${s.viewMode==='grid'?ICONS.list:ICONS.grid}</button>
+      </div>
+    </div>
+    <div class="content">
+      ${renderWeekNav(weekDates, 'sched-prev-week', 'sched-next-week')}
+      ${renderRoleChips(s.roleFilter, 'sched-role-chip')}
+      ${s.viewMode === 'grid'
+        ? renderScheduleGrid(weekDates, s.roleFilter, false)
+        : renderScheduleList(weekDates, s)}
+    </div>
+  `;
+}
+
+function renderWeekNav(weekDates, prevId, nextId) {
+  return `
+    <div style="display:flex;align-items:center;justify-content:center;gap:18px;padding:6px 0 16px;">
+      <button class="btn btn-ghost btn-sm" id="${prevId}">${ICONS.chevLeft}</button>
+      <div style="font-weight:700;font-size:15px;">${weekRangeLabel(weekDates)}</div>
+      <button class="btn btn-ghost btn-sm" id="${nextId}">${ICONS.chevRight}</button>
+    </div>
+  `;
+}
+function renderRoleChips(activeRole, dataAttr) {
+  return `
+    <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:14px;-webkit-overflow-scrolling:touch;">
+      <button class="chip ${!activeRole?'active':''}" data-${dataAttr}="">All</button>
+      ${SELECTABLE_ROLES.filter(r => r !== 'Sushi Server').map(r =>
+        `<button class="chip ${activeRole===r?'active':''}" data-${dataAttr}="${r}">${r}</button>`
+      ).join('')}
+    </div>
+  `;
+}
+
+function employeeRowEmployees(weekDates, roleFilter, managerMode) {
+  const relevant = state.shifts.filter(sh =>
+    (managerMode || sh.published) &&
+    weekDates.some(d => isSameDay(d, sh.date)) &&
+    (() => {
+      const emp = state.employees.find(e => e.id === sh.employeeId);
+      return emp ? employeeMatchesRoleFilter(emp, roleFilter) : true;
+    })()
+  );
+  let list;
+  if (managerMode) {
+    const idsWithShift = new Set(relevant.map(s => s.employeeId));
+    list = state.employees.filter(e => e.active && (employeeMatchesRoleFilter(e, roleFilter) || idsWithShift.has(e.id)));
+  } else {
+    const ids = new Set(relevant.map(s => s.employeeId));
+    list = state.employees.filter(e => ids.has(e.id));
+  }
+  return { employees: list.sort((a,b) => a.name.localeCompare(b.name)), relevantShifts: relevant };
+}
+
+function shiftsFor(relevantShifts, employeeId, date) {
+  return relevantShifts.filter(s => s.employeeId === employeeId && isSameDay(s.date, date))
+    .sort((a,b) => a.startTime - b.startTime);
+}
+
+function renderScheduleGrid(weekDates, roleFilter, managerMode, onCellAction) {
+  const { employees, relevantShifts } = employeeRowEmployees(weekDates, roleFilter, managerMode);
+
+  function cellHtml(emp, date) {
+    const dayShifts = shiftsFor(relevantShifts, emp.id, date);
+    let inner = dayShifts.map(sh => {
+      const color = roleColor(sh.role);
+      const opacity = sh.published ? '2a' : '14';
+      return `<div class="shift-chip" style="background:${color}${opacity};color:${color};border-color:${color}55;" data-shift-chip="${sh.id}">${formatTime(sh.startTime)}</div>`;
+    }).join('<div style="height:2px"></div>');
+    if (managerMode && dayShifts.length < MAX_SHIFTS_PER_DAY) {
+      if (inner) inner += '<div style="height:2px"></div>';
+      inner += `<div class="add-slot" data-add-slot="${emp.id}|${date.toISOString()}">+</div>`;
+    }
+    return `<td>${inner || ''}</td>`;
+  }
+
+  function rowHtml(emp) {
+    return `<tr>
+      <td class="name-cell">${escapeHtml(emp.name)}</td>
+      ${weekDates.map(d => cellHtml(emp, d)).join('')}
+    </tr>`;
+  }
+
+  let bodyRows;
+  if (!employees.length) {
+    bodyRows = `<tr><td colspan="8" style="text-align:center;color:var(--text-tertiary);padding:40px 0;">${managerMode ? 'No staff yet — add employees first' : 'No published shifts this week'}</td></tr>`;
+  } else if (!roleFilter) {
+    const grouped = {};
+    employees.forEach(e => {
+      const sec = sectionRole(e.role);
+      (grouped[sec] = grouped[sec] || []).push(e);
+    });
+    bodyRows = SECTION_ORDER.filter(sec => grouped[sec]?.length).map(sec => `
+      <tr class="section-row"><td colspan="8">${sec}</td></tr>
+      ${grouped[sec].map(rowHtml).join('')}
+    `).join('');
+  } else {
+    bodyRows = employees.map(rowHtml).join('');
+  }
+
+  return `
+    <div class="card" style="overflow-x:auto;margin-bottom:20px;">
+      <table class="grid-table">
+        <thead><tr>
+          <th class="name-header"></th>
+          ${weekDates.map(d => `<th>${weekdayAbbr(d)}<br><span style="color:var(--text-tertiary);font-weight:500;">${d.getDate()}</span></th>`).join('')}
+        </tr></thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderScheduleList(weekDates, s) {
+  const selectedDate = s.selectedDate || weekDates[0];
+  const dayShifts = state.shifts.filter(sh => sh.published && isSameDay(sh.date, selectedDate) &&
+    (() => { const emp = state.employees.find(e=>e.id===sh.employeeId); return emp ? employeeMatchesRoleFilter(emp, s.roleFilter) : true; })()
+  ).sort((a,b)=>a.startTime-b.startTime);
+
+  return `
+    <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:14px;">
+      ${weekDates.map(d => `
+        <button class="chip ${isSameDay(d,selectedDate)?'active':''}" data-sched-day="${d.toISOString()}" style="flex-direction:column;min-width:52px;padding:8px 6px;">
+          <div style="font-size:11px;">${weekdayAbbr(d)}</div><div style="font-weight:800;">${d.getDate()}</div>
+        </button>
+      `).join('')}
+    </div>
+    ${!dayShifts.length ? `
+      <div class="card" style="padding:50px 20px;text-align:center;color:var(--text-tertiary);">No published shifts for this day yet.</div>
+    ` : `
+      <div class="card">
+        ${dayShifts.map((sh,i) => renderShiftRow(sh, i < dayShifts.length-1)).join('')}
+      </div>
+    `}
+  `;
+}
+
+function renderShiftRow(sh, divider) {
+  const color = roleColor(sh.role);
+  const mine = sh.employeeId === state.employee?.id;
+  return `
+    <div data-shift-row="${sh.id}" style="display:flex;align-items:center;gap:12px;padding:14px 16px;${divider?'border-bottom:1px solid var(--border);':''}cursor:pointer;${mine?'background:rgba(232,73,29,0.06);':''}">
+      <div style="width:4px;align-self:stretch;background:${color};border-radius:2px;"></div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-weight:${mine?'700':'500'};">${escapeHtml(sh.employeeName)}</div>
+        <div style="color:var(--text-secondary);font-size:13px;">${formatTime(sh.startTime)}</div>
+      </div>
+      <div class="badge" style="background:${color}22;color:${color};">${sh.role}</div>
+    </div>
+  `;
+}
+
+function attachScheduleHandlers() {
+  if (state.tab !== 'schedule') return;
+  const $ = id => document.getElementById(id);
+  const s = state.schedule;
+  $('sched-info-btn')?.addEventListener('click', () => { state.modals.colorLegend = true; render(); });
+  $('sched-viewmode-btn')?.addEventListener('click', () => { s.viewMode = s.viewMode==='grid'?'list':'grid'; render(); });
+  $('sched-prev-week')?.addEventListener('click', () => { s.anchorDate = addDays(s.anchorDate, -7); render(); });
+  $('sched-next-week')?.addEventListener('click', () => { s.anchorDate = addDays(s.anchorDate, 7); render(); });
+  document.querySelectorAll('[data-sched-role-chip]').forEach(el => {
+    el.addEventListener('click', () => { s.roleFilter = el.dataset.schedRoleChip || null; render(); });
+  });
+  document.querySelectorAll('[data-sched-day]').forEach(el => {
+    el.addEventListener('click', () => { s.selectedDate = new Date(el.dataset.schedDay); render(); });
+  });
+  document.querySelectorAll('[data-shift-chip]').forEach(el => {
+    el.addEventListener('click', (e) => { e.stopPropagation(); const sh = state.shifts.find(x=>x.id===el.dataset.shiftChip); if (sh) { state.modals.shiftDetail = sh; render(); } });
+  });
+  document.querySelectorAll('[data-shift-row]').forEach(el => {
+    el.addEventListener('click', () => { const sh = state.shifts.find(x=>x.id===el.dataset.shiftRow); if (sh) { state.modals.shiftDetail = sh; render(); } });
+  });
+}
+
+// ============================================================================
+// BUILD SCHEDULE TAB (manager)
+// ============================================================================
+function draftCountForWeek(weekDates, roleFilter) {
+  const matchingIds = roleFilter
+    ? new Set(state.employees.filter(e => employeeMatchesRoleFilter(e, roleFilter)).map(e => e.id))
+    : null;
+  return state.shifts.filter(s => !s.published && weekDates.some(d => isSameDay(d, s.date)) && (!matchingIds || matchingIds.has(s.employeeId))).length;
+}
+function totalDraftCount() {
+  return state.shifts.filter(s => !s.published).length;
+}
+
+function renderBuildTab() {
+  const b = state.build;
+  const weekDates = getWeekDates(b.anchorDate);
+  const draftCount = draftCountForWeek(weekDates, b.roleFilter);
+
+  return `
+    <div class="topbar">
+      <h1 class="page-title">Build Schedule</h1>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-secondary btn-sm" id="build-info-btn">${ICONS.info}</button>
+        <button class="btn btn-secondary btn-sm" id="build-viewmode-btn">${b.viewMode==='grid'?ICONS.list:ICONS.grid}</button>
+        <button class="btn btn-secondary btn-sm" id="build-more-btn">${ICONS.more}</button>
+        <div id="build-more-menu" style="display:none;position:absolute;right:20px;margin-top:44px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.4);z-index:40;overflow:hidden;min-width:220px;">
+          <button class="btn-block" style="display:flex;align-items:center;gap:8px;padding:12px 16px;background:none;border:none;color:var(--text);text-align:left;font-size:14px;" id="menu-add-shift">${ICONS.plus} Add Shift</button>
+          <button class="btn-block" style="display:flex;align-items:center;gap:8px;padding:12px 16px;background:none;border:none;color:var(--text);text-align:left;font-size:14px;border-top:1px solid var(--border);" id="menu-copy-week">Copy Last Week</button>
+          ${totalDraftCount() > 0 ? `<button class="btn-block" style="display:flex;align-items:center;gap:8px;padding:12px 16px;background:none;border:none;color:var(--text);text-align:left;font-size:14px;border-top:1px solid var(--border);" id="menu-publish-all">Publish All Weeks (${totalDraftCount()})</button>` : ''}
+          <button class="btn-block" style="display:flex;align-items:center;gap:8px;padding:12px 16px;background:none;border:none;color:var(--text);text-align:left;font-size:14px;border-top:1px solid var(--border);" id="menu-export-pdf">Export PDF (${b.roleFilter || 'All Staff'})</button>
+          <button class="btn-block" style="display:flex;align-items:center;gap:8px;padding:12px 16px;background:none;border:none;color:var(--red);text-align:left;font-size:14px;border-top:1px solid var(--border);" id="menu-clear-week">${ICONS.trash} Clear This Week's Shifts</button>
+        </div>
+      </div>
+    </div>
+    <div class="content">
+      ${renderWeekNav(weekDates, 'build-prev-week', 'build-next-week')}
+      ${renderRoleChips(b.roleFilter, 'build-role-chip')}
+      ${draftCount > 0 ? `
+        <button class="btn btn-primary btn-block" id="build-publish-btn" style="margin-bottom:16px;">
+          Publish ${draftCount} Draft ${b.roleFilter ? b.roleFilter + ' ' : ''}Shift${draftCount===1?'':'s'} This Week
+        </button>
+      ` : ''}
+      ${b.copyMsg ? `<p style="color:var(--text-secondary);font-size:13px;margin:-6px 0 16px;">${escapeHtml(b.copyMsg)}</p>` : ''}
+      ${b.viewMode === 'grid'
+        ? renderScheduleGrid(weekDates, b.roleFilter, true)
+        : renderBuildList(weekDates, b)}
+      <div style="display:flex;gap:16px;color:var(--text-tertiary);font-size:12px;padding:4px 0 20px;">
+        <span>◐ Faded = draft</span><span>⬚ Dashed box = tap to add</span>
+      </div>
+    </div>
+  `;
+}
+
+function renderBuildList(weekDates, b) {
+  const selectedDate = b.selectedDate || weekDates[0];
+  const dayShifts = state.shifts.filter(sh => isSameDay(sh.date, selectedDate) &&
+    (() => { const emp = state.employees.find(e=>e.id===sh.employeeId); return emp ? employeeMatchesRoleFilter(emp, b.roleFilter) : true; })()
+  ).sort((a,b2)=>a.startTime-b2.startTime);
+
+  const grouped = {};
+  dayShifts.forEach(sh => {
+    const emp = state.employees.find(e => e.id === sh.employeeId);
+    const sec = sectionRole(emp ? emp.role : sh.role);
+    (grouped[sec] = grouped[sec] || []).push(sh);
+  });
+
+  return `
+    <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:14px;">
+      ${weekDates.map(d => `
+        <button class="chip ${isSameDay(d,selectedDate)?'active':''}" data-build-day="${d.toISOString()}" style="flex-direction:column;min-width:52px;padding:8px 6px;">
+          <div style="font-size:11px;">${weekdayAbbr(d)}</div><div style="font-weight:800;">${d.getDate()}</div>
+        </button>
+      `).join('')}
+    </div>
+    <div class="card">
+      ${SECTION_ORDER.filter(sec => grouped[sec]?.length).map(sec => `
+        <div style="padding:10px 16px;background:var(--bg-elevated-2);font-size:11px;font-weight:700;letter-spacing:0.04em;color:var(--text-secondary);text-transform:uppercase;">${sec}</div>
+        ${grouped[sec].map((sh,i) => `
+          <div data-build-shift-row="${sh.id}" style="display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border);cursor:pointer;">
+            <div style="width:4px;align-self:stretch;background:${roleColor(sh.role)};border-radius:2px;"></div>
+            <div style="flex:1;">
+              <div style="font-weight:500;">${escapeHtml(sh.employeeName)}</div>
+              <div style="color:var(--text-secondary);font-size:13px;">${formatTime(sh.startTime)}</div>
+            </div>
+            <div class="badge" style="background:${roleColor(sh.role)}22;color:${roleColor(sh.role)};">${sh.role}</div>
+            ${!sh.published ? `<div class="badge" style="background:var(--bg-elevated-2);color:var(--text-secondary);">Draft</div>` : ''}
+          </div>
+        `).join('')}
+      `).join('') || `<div style="padding:40px 20px;text-align:center;color:var(--text-tertiary);">No shifts for this day.</div>`}
+    </div>
+  `;
+}
+
+function attachBuildHandlers() {
+  if (state.tab !== 'build') return;
+  const $ = id => document.getElementById(id);
+  const b = state.build;
+
+  $('build-info-btn')?.addEventListener('click', () => { state.modals.colorLegend = true; render(); });
+  $('build-viewmode-btn')?.addEventListener('click', () => { b.viewMode = b.viewMode==='grid'?'list':'grid'; render(); });
+  $('build-prev-week')?.addEventListener('click', () => { b.anchorDate = addDays(b.anchorDate, -7); render(); });
+  $('build-next-week')?.addEventListener('click', () => { b.anchorDate = addDays(b.anchorDate, 7); render(); });
+  document.querySelectorAll('[data-build-role-chip]').forEach(el => {
+    el.addEventListener('click', () => { b.roleFilter = el.dataset.buildRoleChip || null; render(); });
+  });
+  document.querySelectorAll('[data-build-day]').forEach(el => {
+    el.addEventListener('click', () => { b.selectedDate = new Date(el.dataset.buildDay); render(); });
+  });
+
+  const menu = $('build-more-menu');
+  $('build-more-btn')?.addEventListener('click', (e) => { e.stopPropagation(); if (menu) menu.style.display = menu.style.display==='none'?'block':'none'; });
+  document.addEventListener('click', () => { if (menu) menu.style.display = 'none'; }, { once: true });
+
+  $('menu-add-shift')?.addEventListener('click', () => {
+    state.modals.shiftEditor = { date: b.selectedDate || getWeekDates(b.anchorDate)[0], existingShift: null };
+    state.modals.shiftEditorForm = {};
+    render();
+  });
+  $('menu-copy-week')?.addEventListener('click', async () => {
+    showConfirm({
+      title: "Copy Last Week's Schedule?",
+      message: "This copies every shift from the previous week into this week as drafts — nothing goes live until you publish. Existing shifts this week won't be removed.",
+      confirmLabel: 'Copy',
+      onConfirm: async () => {
+        const count = await copyPreviousWeek(startOfWeekMonday(b.anchorDate));
+        b.copyMsg = count > 0 ? `Copied ${count} shift${count===1?'':'s'} from last week as drafts. Review, then publish.` : 'No shifts found in the previous week to copy.';
+        render();
+      }
+    });
+  });
+  $('menu-publish-all')?.addEventListener('click', () => {
+    showConfirm({
+      title: 'Publish Every Drafted Week?',
+      message: `This makes all ${totalDraftCount()} draft shift(s) across every week you've built visible to staff at once.`,
+      confirmLabel: 'Publish All',
+      onConfirm: async () => { await publishAllDraftShifts(); render(); }
+    });
+  });
+  $('menu-export-pdf')?.addEventListener('click', () => {
+    exportSchedulePDF(getWeekDates(b.anchorDate), b.roleFilter);
+  });
+  $('menu-clear-week')?.addEventListener('click', () => {
+    const weekDates = getWeekDates(b.anchorDate);
+    showConfirm({
+      title: "Clear This Week's Shifts?",
+      message: "This deletes every shift (draft and published) for this week. Staff stay on the roster — you'll just start this week's grid empty. This can't be undone.",
+      confirmLabel: 'Clear Shifts', danger: true,
+      onConfirm: async () => { await clearShifts(weekDates); render(); }
+    });
+  });
+
+  $('build-publish-btn')?.addEventListener('click', () => {
+    const weekDates = getWeekDates(b.anchorDate);
+    const count = draftCountForWeek(weekDates, b.roleFilter);
+    showConfirm({
+      title: "Publish This Week's Schedule?",
+      message: `This makes ${count} draft ${b.roleFilter ? b.roleFilter + ' ' : ''}shift(s) for ${weekRangeLabel(weekDates)} visible to staff. Other ${b.roleFilter ? 'roles and other ' : ''}weeks won't be affected.`,
+      confirmLabel: 'Publish',
+      onConfirm: async () => { await publishDraftShifts(weekDates, b.roleFilter); render(); }
+    });
+  });
+
+  document.querySelectorAll('[data-shift-chip]').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const sh = state.shifts.find(x=>x.id===el.dataset.shiftChip);
+      if (sh) openShiftEditor(sh.date, sh, null);
+    });
+  });
+  document.querySelectorAll('[data-add-slot]').forEach(el => {
+    el.addEventListener('click', () => {
+      const [empId, dateIso] = el.dataset.addSlot.split('|');
+      const emp = state.employees.find(e => e.id === empId);
+      openShiftEditor(new Date(dateIso), null, emp);
+    });
+  });
+  document.querySelectorAll('[data-build-shift-row]').forEach(el => {
+    el.addEventListener('click', () => {
+      const sh = state.shifts.find(x=>x.id===el.dataset.buildShiftRow);
+      if (sh) openShiftEditor(sh.date, sh, null);
+    });
+  });
+}
+
+function openShiftEditor(date, existingShift, presetEmployee) {
+  state.modals.shiftEditor = { date, existingShift, presetEmployee };
+  if (existingShift) {
+    state.modals.shiftEditorForm = {
+      employeeId: existingShift.employeeId, role: existingShift.role,
+      hour: (() => { const h = existingShift.startTime.getHours(); const h12 = h%12===0?12:h%12; return h12; })(),
+      minute: existingShift.startTime.getMinutes(),
+      isPM: existingShift.startTime.getHours() >= 12,
+      notes: existingShift.notes || '', published: existingShift.published,
+    };
+  } else {
+    state.modals.shiftEditorForm = {
+      employeeId: presetEmployee ? presetEmployee.id : '',
+      role: presetEmployee ? presetEmployee.role : SELECTABLE_ROLES[0],
+      hour: 4, minute: 0, isPM: true, notes: '', published: false,
+    };
+  }
+  render();
+}
+
+// ============================================================================
+// REQUESTS TAB (staff)
+// ============================================================================
+function renderRequestsTab() {
+  const myId = state.employee?.id;
+  const myTimeOff = state.timeOffRequests.filter(r => r.employeeId === myId);
+  const mySwaps = state.swapRequests.filter(s => s.requestingEmployeeId === myId || s.coveringEmployeeId === myId);
+
+  return `
+    <div class="topbar"><h1 class="page-title">Requests</h1></div>
+    <div class="content">
+      <div class="card" style="margin-bottom:20px;overflow:hidden;">
+        <button class="btn-block" id="req-timeoff-btn" style="display:flex;align-items:center;gap:10px;padding:16px;background:none;border:none;color:var(--accent);text-align:left;font-size:15px;font-weight:600;">
+          ${ICONS.sun} Request Time Off
+        </button>
+        <button class="btn-block" id="req-swap-btn" style="display:flex;align-items:center;gap:10px;padding:16px;background:none;border:none;color:var(--accent);text-align:left;font-size:15px;font-weight:600;border-top:1px solid var(--border);">
+          ${ICONS.swap} Request a Shift Swap
+        </button>
+      </div>
+
+      ${myTimeOff.length ? `
+        <h3 style="font-size:13px;color:var(--text-secondary);margin:0 0 10px;">Time Off Requests</h3>
+        <div class="card" style="margin-bottom:20px;overflow:hidden;">
+          ${myTimeOff.map((r,i) => renderTimeOffRow(r, i<myTimeOff.length-1)).join('')}
+        </div>
+      ` : ''}
+
+      ${mySwaps.length ? `
+        <h3 style="font-size:13px;color:var(--text-secondary);margin:0 0 10px;">Swap Requests</h3>
+        <div class="card" style="overflow:hidden;">
+          ${mySwaps.map((s,i) => renderSwapRow(s, myId, i<mySwaps.length-1)).join('')}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function statusColor(status) {
+  if (status === 'Approved') return 'var(--green)';
+  if (status === 'Denied') return 'var(--red)';
+  if (status === 'Cancelled') return 'var(--text-tertiary)';
+  return 'var(--orange)';
+}
+
+function renderTimeOffRow(r, divider) {
+  const canCancel = r.status !== 'Cancelled';
+  return `
+    <div style="padding:14px 16px;${divider?'border-bottom:1px solid var(--border);':''}">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        <div style="font-weight:600;font-size:14px;">${formatDateShort(r.startDate)} – ${formatDateShort(r.endDate)}</div>
+        <span class="badge" style="background:${statusColor(r.status)}22;color:${statusColor(r.status)};">${r.status}</span>
+      </div>
+      ${r.reason ? `<div style="color:var(--text-secondary);font-size:13px;margin-top:2px;">${escapeHtml(r.reason)}</div>` : ''}
+      ${r.managerNote ? `<div style="color:var(--text-tertiary);font-size:12px;margin-top:2px;font-style:italic;">Manager: ${escapeHtml(r.managerNote)}</div>` : ''}
+      <div style="display:flex;gap:14px;margin-top:8px;">
+        ${canCancel ? `<button data-cancel-timeoff="${r.id}" style="background:none;border:none;color:var(--red);font-size:12px;font-weight:600;padding:0;cursor:pointer;">Cancel Request</button>` : ''}
+        <button data-delete-timeoff="${r.id}" style="background:none;border:none;color:var(--text-tertiary);font-size:12px;font-weight:600;padding:0;cursor:pointer;">Delete</button>
+      </div>
+    </div>
+  `;
+}
+function renderSwapRow(s, myId, divider) {
+  const needsResponse = s.status === 'Waiting on Coworker' && s.coveringEmployeeId === myId;
+  const canCancel = s.requestingEmployeeId === myId && (s.status === 'Waiting on Coworker' || s.status === 'Waiting on Manager');
+  return `
+    <div style="padding:14px 16px;${divider?'border-bottom:1px solid var(--border);':''}">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        <div style="font-weight:600;font-size:14px;">${escapeHtml(s.shiftDescription)}</div>
+        <span class="badge" style="background:${statusColor(s.status==='Waiting on Coworker'||s.status==='Waiting on Manager'?'Pending':s.status)}22;color:${statusColor(s.status==='Waiting on Coworker'||s.status==='Waiting on Manager'?'Pending':s.status)};">${s.status}</span>
+      </div>
+      <div style="color:var(--text-secondary);font-size:13px;margin-top:2px;">${s.requestingEmployeeId===myId ? `Covering: ${escapeHtml(s.coveringEmployeeName)}` : `From: ${escapeHtml(s.requestingEmployeeName)}`}</div>
+      <div style="display:flex;gap:10px;margin-top:8px;">
+        ${needsResponse ? `
+          <button data-swap-respond="${s.id}|false" class="btn btn-sm btn-secondary">Decline</button>
+          <button data-swap-respond="${s.id}|true" class="btn btn-sm btn-primary">Accept</button>
+        ` : ''}
+        ${canCancel ? `<button data-cancel-swap="${s.id}" style="background:none;border:none;color:var(--red);font-size:12px;font-weight:600;padding:0;cursor:pointer;">Cancel Request</button>` : ''}
+        <button data-delete-swap="${s.id}" style="background:none;border:none;color:var(--text-tertiary);font-size:12px;font-weight:600;padding:0;cursor:pointer;">Delete</button>
+      </div>
+    </div>
+  `;
+}
+
+function attachRequestsHandlers() {
+  if (state.tab !== 'requests') return;
+  const $ = id => document.getElementById(id);
+  $('req-timeoff-btn')?.addEventListener('click', () => { state.modals.timeOff = true; state.modals.timeOffForm = { startDate: new Date(), endDate: new Date(), reason: '' }; render(); });
+  $('req-swap-btn')?.addEventListener('click', () => { state.modals.swap = true; state.modals.swapForm = {}; render(); });
+
+  document.querySelectorAll('[data-cancel-timeoff]').forEach(el => el.addEventListener('click', () => cancelTimeOffRequest(el.dataset.cancelTimeoff)));
+  document.querySelectorAll('[data-delete-timeoff]').forEach(el => el.addEventListener('click', () => {
+    showConfirm({ title: 'Delete Request?', message: 'This permanently removes it from your history.', confirmLabel: 'Delete', danger: true, onConfirm: () => deleteTimeOffRequest(el.dataset.deleteTimeoff) });
+  }));
+  document.querySelectorAll('[data-cancel-swap]').forEach(el => el.addEventListener('click', () => {
+    const req = state.swapRequests.find(s => s.id === el.dataset.cancelSwap);
+    if (req) cancelSwapRequest(req);
+  }));
+  document.querySelectorAll('[data-delete-swap]').forEach(el => el.addEventListener('click', () => {
+    showConfirm({ title: 'Delete Request?', message: 'This permanently removes it from your history — for both people involved, if this was a swap.', confirmLabel: 'Delete', danger: true, onConfirm: () => deleteSwapRequest(el.dataset.deleteSwap) });
+  }));
+  document.querySelectorAll('[data-swap-respond]').forEach(el => el.addEventListener('click', () => {
+    const [id, accept] = el.dataset.swapRespond.split('|');
+    respondToSwapAsCoworker(id, accept === 'true');
+  }));
+}
+
+// ============================================================================
+// APPROVALS TAB (manager)
+// ============================================================================
+function renderApprovalsTab() {
+  const a = state.approvals;
+  const pendingTimeOff = state.timeOffRequests.filter(r => r.status === 'Pending');
+  const pendingSwaps = state.swapRequests.filter(s => s.status === 'Waiting on Manager');
+
+  return `
+    <div class="topbar"><h1 class="page-title">Approvals</h1></div>
+    <div class="content">
+      <div style="display:flex;gap:8px;margin-bottom:18px;background:var(--bg-elevated-2);padding:4px;border-radius:12px;width:fit-content;">
+        <button class="chip ${a.viewMode==='list'?'active':''}" data-appr-mode="list" style="background:${a.viewMode==='list'?'var(--accent-dim)':'transparent'};">Requests</button>
+        <button class="chip ${a.viewMode==='calendar'?'active':''}" data-appr-mode="calendar" style="background:${a.viewMode==='calendar'?'var(--accent-dim)':'transparent'};">Calendar</button>
+      </div>
+      ${a.viewMode === 'list' ? `
+        ${!pendingTimeOff.length && !pendingSwaps.length ? `
+          <div class="card" style="padding:50px 20px;text-align:center;color:var(--text-tertiary);">All caught up — no pending requests.</div>
+        ` : ''}
+        ${pendingTimeOff.length ? `
+          <h3 style="font-size:13px;color:var(--text-secondary);margin:0 0 10px;">Time Off Requests</h3>
+          <div class="card" style="margin-bottom:20px;overflow:hidden;">
+            ${pendingTimeOff.map((r,i) => renderTimeOffApprovalRow(r, i<pendingTimeOff.length-1)).join('')}
+          </div>
+        ` : ''}
+        ${pendingSwaps.length ? `
+          <h3 style="font-size:13px;color:var(--text-secondary);margin:0 0 10px;">Shift Swaps Awaiting Approval</h3>
+          <div class="card" style="overflow:hidden;">
+            ${pendingSwaps.map((s,i) => renderSwapApprovalRow(s, i<pendingSwaps.length-1)).join('')}
+          </div>
+        ` : ''}
+      ` : renderTimeOffCalendar()}
+    </div>
+  `;
+}
+
+function renderTimeOffApprovalRow(r, divider) {
+  return `
+    <div style="padding:14px 16px;${divider?'border-bottom:1px solid var(--border);':''}">
+      <div style="font-weight:600;font-size:14px;">${escapeHtml(r.employeeName)}</div>
+      <div style="color:var(--text-secondary);font-size:13px;">${formatDateShort(r.startDate)} – ${formatDateShort(r.endDate)}</div>
+      ${r.reason ? `<div style="color:var(--text-secondary);font-size:13px;">${escapeHtml(r.reason)}</div>` : ''}
+      <div style="display:flex;gap:10px;margin-top:8px;">
+        <button data-timeoff-decision="${r.id}|Denied" class="btn btn-sm btn-secondary" style="color:var(--red);">Deny</button>
+        <button data-timeoff-decision="${r.id}|Approved" class="btn btn-sm btn-primary">Approve</button>
+      </div>
+    </div>
+  `;
+}
+function renderSwapApprovalRow(s, divider) {
+  return `
+    <div style="padding:14px 16px;${divider?'border-bottom:1px solid var(--border);':''}">
+      <div style="font-weight:600;font-size:14px;">${escapeHtml(s.shiftDescription)}</div>
+      <div style="color:var(--text-secondary);font-size:13px;">${escapeHtml(s.requestingEmployeeName)} → ${escapeHtml(s.coveringEmployeeName)}</div>
+      <div style="display:flex;gap:10px;margin-top:8px;">
+        <button data-swap-decision="${s.id}|false" class="btn btn-sm btn-secondary" style="color:var(--red);">Deny</button>
+        <button data-swap-decision="${s.id}|true" class="btn btn-sm btn-primary">Approve</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderTimeOffCalendar() {
+  const a = state.approvals;
+  const weekDates = getWeekDates(a.calAnchorDate);
+  const relevant = state.timeOffRequests.filter(r => (r.status==='Pending'||r.status==='Approved') &&
+    weekDates.some(d => d >= new Date(r.startDate.getFullYear(),r.startDate.getMonth(),r.startDate.getDate()) && d <= new Date(r.endDate.getFullYear(),r.endDate.getMonth(),r.endDate.getDate())));
+  const empIds = new Set(relevant.map(r => r.employeeId));
+  const employees = state.employees.filter(e => empIds.has(e.id)).sort((a2,b)=>a2.name.localeCompare(b.name));
+  const grouped = {};
+  employees.forEach(e => { (grouped[sectionRole(e.role)] = grouped[sectionRole(e.role)] || []).push(e); });
+
+  function cellFor(emp, date) {
+    const req = relevant.find(r => r.employeeId === emp.id && date >= new Date(r.startDate.getFullYear(),r.startDate.getMonth(),r.startDate.getDate()) && date <= new Date(r.endDate.getFullYear(),r.endDate.getMonth(),r.endDate.getDate()));
+    if (!req) return '<td></td>';
+    const color = req.status === 'Approved' ? 'var(--green)' : 'var(--orange)';
+    return `<td><div data-timeoff-cell="${req.id}" style="background:${color}22;border:1px solid ${color};border-radius:6px;text-align:center;padding:4px;cursor:pointer;color:${color};font-size:16px;">☀</div></td>`;
+  }
+
+  return `
+    ${renderWeekNav(weekDates, 'cal-prev-week', 'cal-next-week')}
+    ${!employees.length ? `
+      <div class="card" style="padding:50px 20px;text-align:center;color:var(--text-tertiary);">Nobody has a pending or approved time-off request for ${weekRangeLabel(weekDates)}.</div>
+    ` : `
+      <div class="card" style="overflow-x:auto;">
+        <table class="grid-table">
+          <thead><tr><th class="name-header"></th>${weekDates.map(d=>`<th>${weekdayAbbr(d)}<br><span style="color:var(--text-tertiary);font-weight:500;">${d.getDate()}</span></th>`).join('')}</tr></thead>
+          <tbody>
+            ${SECTION_ORDER.filter(sec=>grouped[sec]?.length).map(sec => `
+              <tr class="section-row"><td colspan="8">${sec}</td></tr>
+              ${grouped[sec].map(e => `<tr><td class="name-cell">${escapeHtml(e.name)}</td>${weekDates.map(d=>cellFor(e,d)).join('')}</tr>`).join('')}
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div style="display:flex;gap:16px;color:var(--text-tertiary);font-size:12px;padding:12px 0;">
+        <span style="color:var(--orange);">☀ Pending</span><span style="color:var(--green);">☀ Approved</span>
+      </div>
+    `}
+  `;
+}
+
+function attachApprovalsHandlers() {
+  if (state.tab !== 'approvals') return;
+  const $ = id => document.getElementById(id);
+  const a = state.approvals;
+  document.querySelectorAll('[data-appr-mode]').forEach(el => el.addEventListener('click', () => { a.viewMode = el.dataset.apprMode; render(); }));
+  $('cal-prev-week')?.addEventListener('click', () => { a.calAnchorDate = addDays(a.calAnchorDate, -7); render(); });
+  $('cal-next-week')?.addEventListener('click', () => { a.calAnchorDate = addDays(a.calAnchorDate, 7); render(); });
+  document.querySelectorAll('[data-timeoff-decision]').forEach(el => el.addEventListener('click', () => {
+    const [id, status] = el.dataset.timeoffDecision.split('|');
+    updateTimeOffStatus(id, status, '');
+  }));
+  document.querySelectorAll('[data-swap-decision]').forEach(el => el.addEventListener('click', () => {
+    const [id, approve] = el.dataset.swapDecision.split('|');
+    const req = state.swapRequests.find(s => s.id === id);
+    if (req) respondToSwapAsManager(req, approve === 'true');
+  }));
+  document.querySelectorAll('[data-timeoff-cell]').forEach(el => el.addEventListener('click', () => {
+    const req = state.timeOffRequests.find(r => r.id === el.dataset.timeoffCell);
+    if (req) { state.modals.timeOffDetail = req; render(); }
+  }));
+}
+
+// ============================================================================
+// PROFILE TAB
+// ============================================================================
+function renderProfileTab() {
+  const e = state.employee;
+  const isManager = !!e?.isManager;
+  return `
+    <div class="topbar"><h1 class="page-title">Profile</h1></div>
+    <div class="content">
+      <div class="card" style="margin-bottom:8px;overflow:hidden;">
+        <button id="profile-edit-name" class="btn-block" style="display:flex;justify-content:space-between;padding:14px 16px;background:none;border:none;color:var(--text);text-align:left;border-bottom:1px solid var(--border);">
+          <span style="color:var(--text-secondary);">Name</span><span style="font-weight:600;">${escapeHtml(e.name)}</span>
+        </button>
+        <div style="display:flex;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border);">
+          <span style="color:var(--text-secondary);">Role</span><span>${e.role}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:14px 16px;${isManager?'border-bottom:1px solid var(--border);':''}">
+          <span style="color:var(--text-secondary);">Phone</span><span>${escapeHtml(e.phone || '—')}</span>
+        </div>
+        ${isManager ? `<div style="display:flex;justify-content:space-between;padding:14px 16px;"><span style="color:var(--text-secondary);">Access</span><span>Manager</span></div>` : ''}
+      </div>
+      <p style="color:var(--text-tertiary);font-size:12px;margin:0 0 20px;">Tap your name to edit it.</p>
+
+      ${isManager ? `
+        <button id="profile-manage-staff" class="card btn-block" style="display:flex;justify-content:space-between;align-items:center;padding:16px;background:var(--bg-elevated);border:1px solid var(--border);color:var(--text);text-align:left;margin-bottom:20px;font-size:15px;font-weight:600;">
+          <span style="display:flex;align-items:center;gap:10px;">${ICONS.user} Manage Staff</span>${ICONS.chevRight}
+        </button>
+      ` : ''}
+
+      <button id="profile-signout" class="btn btn-danger btn-block">Sign Out</button>
+    </div>
+  `;
+}
+
+function attachProfileHandlers() {
+  if (state.tab !== 'profile') return;
+  const $ = id => document.getElementById(id);
+  $('profile-edit-name')?.addEventListener('click', () => { state.modals.editName = true; state.modals.editNameValue = state.employee.name; render(); });
+  $('profile-signout')?.addEventListener('click', signOut);
+  $('profile-manage-staff')?.addEventListener('click', () => { state.tab = 'manageStaff'; render(); });
+}
+
+// ============================================================================
+// MANAGE STAFF TAB
+// ============================================================================
+function renderManageStaffTab() {
+  const list = [...state.employees].sort((a,b) => a.name.localeCompare(b.name));
+  return `
+    <div class="topbar">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button id="ms-back" class="btn btn-ghost btn-sm">${ICONS.chevLeft}</button>
+        <h1 class="page-title" style="font-size:20px;">Manage Staff</h1>
+      </div>
+      <button id="ms-add" class="btn btn-primary btn-sm">${ICONS.plus} Add</button>
+    </div>
+    <div class="content">
+      <div class="card" style="overflow:hidden;">
+        ${list.map((e,i) => `
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;${i<list.length-1?'border-bottom:1px solid var(--border);':''}">
+            <button data-ms-edit="${e.id}" style="background:none;border:none;text-align:left;color:var(--text);cursor:pointer;flex:1;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="font-weight:600;">${escapeHtml(e.name)}</span>
+                ${e.isManager ? `<span class="badge" style="background:#6366f122;color:#6366f1;">Manager</span>` : ''}
+              </div>
+              <div style="color:var(--text-secondary);font-size:13px;">${e.role}</div>
+            </button>
+            <button data-ms-delete="${e.id}" style="background:none;border:none;color:var(--red);padding:6px;cursor:pointer;">${ICONS.trash}</button>
+          </div>
+        `).join('') || `<div style="padding:30px;text-align:center;color:var(--text-tertiary);">No staff yet.</div>`}
+      </div>
+      <p style="color:var(--text-tertiary);font-size:12px;margin-top:10px;">Tap anyone to edit their name, role, or manager access.</p>
+    </div>
+  `;
+}
+function attachManageStaffHandlers() {
+  if (state.tab !== 'manageStaff') return;
+  const $ = id => document.getElementById(id);
+  $('ms-back')?.addEventListener('click', () => { state.tab = 'profile'; render(); });
+  $('ms-add')?.addEventListener('click', () => { state.modals.addStaff = {}; state.modals.staffForm = { name:'', role: SELECTABLE_ROLES[0], isManager: false }; render(); });
+  document.querySelectorAll('[data-ms-edit]').forEach(el => el.addEventListener('click', () => {
+    const emp = state.employees.find(e => e.id === el.dataset.msEdit);
+    if (!emp) return;
+    state.modals.addStaff = { existingEmployee: emp };
+    state.modals.staffForm = { name: emp.name, role: emp.role, isManager: !!emp.isManager };
+    render();
+  }));
+  document.querySelectorAll('[data-ms-delete]').forEach(el => el.addEventListener('click', () => {
+    const emp = state.employees.find(e => e.id === el.dataset.msDelete);
+    showConfirm({
+      title: `Delete ${emp?.name || 'this person'}?`,
+      message: 'This removes them from the roster and future schedules. Their past shifts stay on record with their name.',
+      confirmLabel: 'Delete', danger: true,
+      onConfirm: () => deleteEmployee(el.dataset.msDelete),
+    });
+  }));
+}
+
+// ============================================================================
+// MODALS
+// ============================================================================
+function modalWrap(title, bodyHtml, footerHtml, closeId) {
+  return `
+    <div class="modal-backdrop" id="modal-backdrop">
+      <div class="modal">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--border);">
+          <h3 style="margin:0;font-size:16px;">${title}</h3>
+          <button id="${closeId}" style="background:none;border:none;color:var(--text-secondary);font-size:20px;cursor:pointer;line-height:1;">&times;</button>
+        </div>
+        <div style="padding:18px;">${bodyHtml}</div>
+        ${footerHtml ? `<div style="padding:14px 18px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end;">${footerHtml}</div>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function renderModals() {
+  const m = state.modals;
+  let html = '';
+  if (m.shiftEditor) html += renderShiftEditorModal();
+  if (m.shiftDetail) html += renderShiftDetailModal();
+  if (m.addStaff) html += renderStaffFormModal();
+  if (m.editName) html += renderEditNameModal();
+  if (m.timeOff) html += renderTimeOffFormModal();
+  if (m.swap) html += renderSwapFormModal();
+  if (m.timeOffDetail) html += renderTimeOffDetailModal();
+  if (m.colorLegend) html += renderColorLegendModal();
+  if (m.confirm) html += renderConfirmModal();
+  return html;
+}
+
+// ---- Shift editor ----
+function renderShiftEditorModal() {
+  const { existingShift } = state.modals.shiftEditor;
+  const f = state.modals.shiftEditorForm;
+  const activeEmployees = state.employees.filter(e => e.active);
+  return modalWrap(existingShift ? 'Edit Shift' : 'Add Shift', `
+    <label class="label">Employee</label>
+    <select class="input" id="se-employee" style="margin-bottom:14px;">
+      <option value="">Select employee</option>
+      ${activeEmployees.map(e => `<option value="${e.id}" ${f.employeeId===e.id?'selected':''}>${escapeHtml(e.name)}</option>`).join('')}
+    </select>
+    <label class="label">Role for this shift</label>
+    <select class="input" id="se-role" style="margin-bottom:14px;">
+      ${SELECTABLE_ROLES.map(r => `<option value="${r}" ${f.role===r?'selected':''}>${r}</option>`).join('')}
+    </select>
+    <label class="label">Start Time</label>
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+      <input class="input" id="se-hour" type="number" min="1" max="12" value="${f.hour}" style="width:64px;text-align:center;">
+      <span>:</span>
+      <input class="input" id="se-minute" type="number" min="0" max="59" value="${String(f.minute).padStart(2,'0')}" style="width:64px;text-align:center;">
+      <div style="display:flex;background:var(--bg-elevated-2);border-radius:8px;overflow:hidden;margin-left:6px;">
+        <button type="button" id="se-am" class="btn-sm" style="border:none;padding:9px 14px;background:${!f.isPM?'var(--accent)':'transparent'};color:${!f.isPM?'white':'var(--text-secondary)'};">AM</button>
+        <button type="button" id="se-pm" class="btn-sm" style="border:none;padding:9px 14px;background:${f.isPM?'var(--accent)':'transparent'};color:${f.isPM?'white':'var(--text-secondary)'};">PM</button>
+      </div>
+    </div>
+    <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 14px;">No end time needed — shift lengths vary too much in practice.</p>
+    <label class="label">Notes (optional)</label>
+    <input class="input" id="se-notes" type="text" value="${escapeHtml(f.notes||'')}" placeholder="e.g. training shift" style="margin-bottom:14px;">
+    <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;">
+      <input type="checkbox" id="se-published" ${f.published?'checked':''}> Publish immediately (staff will be notified)
+    </label>
+    ${existingShift ? `<button id="se-delete" class="btn btn-danger btn-block" style="margin-top:18px;">${ICONS.trash} Delete Shift</button>` : ''}
+  `, `
+    <button class="btn btn-secondary" id="se-cancel">Cancel</button>
+    <button class="btn btn-primary" id="se-save">Save</button>
+  `, 'se-close');
+}
+function attachShiftEditorHandlers() {
+  const $ = id => document.getElementById(id);
+  const f = state.modals.shiftEditorForm;
+  const close = () => { state.modals.shiftEditor = null; render(); };
+  $('se-close')?.addEventListener('click', close);
+  $('se-cancel')?.addEventListener('click', close);
+  $('se-employee')?.addEventListener('change', e => { f.employeeId = e.target.value; });
+  $('se-role')?.addEventListener('change', e => { f.role = e.target.value; });
+  $('se-hour')?.addEventListener('input', e => { f.hour = parseInt(e.target.value)||1; });
+  $('se-minute')?.addEventListener('input', e => { f.minute = parseInt(e.target.value)||0; });
+  $('se-notes')?.addEventListener('input', e => { f.notes = e.target.value; });
+  $('se-published')?.addEventListener('change', e => { f.published = e.target.checked; });
+  $('se-am')?.addEventListener('click', () => { f.isPM = false; render(); });
+  $('se-pm')?.addEventListener('click', () => { f.isPM = true; render(); });
+  $('se-delete')?.addEventListener('click', () => {
+    const { existingShift } = state.modals.shiftEditor;
+    showConfirm({
+      title: 'Delete this shift?', confirmLabel: 'Delete Shift', danger: true,
+      onConfirm: async () => {
+        await deleteShift(existingShift.id);
+        state.modals.shiftEditor = null;
+        const weekDates = getWeekDates(state.build.anchorDate);
+        const count = draftCountForWeek(weekDates, state.build.roleFilter);
+        render();
+        if (count > 0) {
+          showConfirm({
+            title: "Publish This Week's Schedule?",
+            message: `Shift deleted. Want to publish the remaining ${count} draft shift(s) now?`,
+            confirmLabel: 'Publish',
+            onConfirm: async () => { await publishDraftShifts(weekDates, state.build.roleFilter); render(); }
+          });
+        }
+      }
+    });
+  });
+  $('se-save')?.addEventListener('click', async () => {
+    const { date, existingShift } = state.modals.shiftEditor;
+    if (!f.employeeId) return;
+    const emp = state.employees.find(e => e.id === f.employeeId);
+    let hour24 = f.hour % 12;
+    if (f.isPM) hour24 += 12;
+    const startTime = new Date(date);
+    startTime.setHours(hour24, f.minute, 0, 0);
+    const payload = {
+      employeeId: f.employeeId, employeeName: emp.name, role: f.role,
+      date: new Date(date.getFullYear(), date.getMonth(), date.getDate()),
+      startTime, notes: f.notes || '', published: !!f.published,
+    };
+    if (existingShift) await updateShift(existingShift.id, payload);
+    else await addShift(payload);
+    state.modals.shiftEditor = null;
+    render();
+  });
+}
+
+// ---- Shift detail (staff read-only) ----
+function renderShiftDetailModal() {
+  const sh = state.modals.shiftDetail;
+  return modalWrap('Shift Details', `
+    <div style="display:flex;flex-direction:column;gap:10px;font-size:14px;">
+      <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Employee</span><span>${escapeHtml(sh.employeeName)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Role</span><span>${sh.role}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Date</span><span>${formatDateFull(sh.date)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Start Time</span><span>${formatTime(sh.startTime)}</span></div>
+      ${sh.notes ? `<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Notes</span><span>${escapeHtml(sh.notes)}</span></div>` : ''}
+      <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Status</span><span class="badge" style="background:${sh.published?'var(--green)':'var(--bg-elevated-2)'}22;color:${sh.published?'var(--green)':'var(--text-secondary)'};">${sh.published?'Published':'Draft'}</span></div>
+    </div>
+  `, `<button class="btn btn-primary" id="sd-close2">Done</button>`, 'sd-close');
+}
+function attachShiftDetailHandlers() {
+  const close = () => { state.modals.shiftDetail = null; render(); };
+  document.getElementById('sd-close')?.addEventListener('click', close);
+  document.getElementById('sd-close2')?.addEventListener('click', close);
+}
+
+// ---- Add/edit staff ----
+function renderStaffFormModal() {
+  const { existingEmployee } = state.modals.addStaff;
+  const f = state.modals.staffForm;
+  return modalWrap(existingEmployee ? 'Edit Staff' : 'Add Staff', `
+    <label class="label">Name</label>
+    <input class="input" id="sf-name" type="text" value="${escapeHtml(f.name)}" style="margin-bottom:14px;">
+    <label class="label">Role</label>
+    <select class="input" id="sf-role" style="margin-bottom:14px;">
+      ${SELECTABLE_ROLES.map(r => `<option value="${r}" ${f.role===r?'selected':''}>${r}</option>`).join('')}
+    </select>
+    <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;margin-bottom:6px;">
+      <input type="checkbox" id="sf-manager" ${f.isManager?'checked':''}> Manager Access
+    </label>
+    <p style="font-size:12px;color:var(--text-tertiary);margin:0;">Lets them build the schedule and approve requests. This is the only place manager access can be granted.</p>
+    ${!existingEmployee ? `<p style="font-size:12px;color:var(--text-tertiary);margin:14px 0 0;">This adds them to the roster so you can assign shifts. They won't be able to sign in with this — if they want their own login, have them create an account instead.</p>` : ''}
+  `, `
+    <button class="btn btn-secondary" id="sf-cancel">Cancel</button>
+    <button class="btn btn-primary" id="sf-save">${existingEmployee ? 'Save' : 'Add'}</button>
+  `, 'sf-close');
+}
+function attachStaffFormHandlers() {
+  const $ = id => document.getElementById(id);
+  const f = state.modals.staffForm;
+  const close = () => { state.modals.addStaff = null; render(); };
+  $('sf-close')?.addEventListener('click', close);
+  $('sf-cancel')?.addEventListener('click', close);
+  $('sf-name')?.addEventListener('input', e => { f.name = e.target.value; });
+  $('sf-role')?.addEventListener('change', e => { f.role = e.target.value; });
+  $('sf-manager')?.addEventListener('change', e => { f.isManager = e.target.checked; });
+  $('sf-save')?.addEventListener('click', async () => {
+    if (!f.name.trim()) return;
+    const { existingEmployee } = state.modals.addStaff;
+    if (existingEmployee) await updateEmployee(existingEmployee.id, f.name.trim(), f.role, f.isManager);
+    else await addEmployee(f.name.trim(), f.role, f.isManager);
+    state.modals.addStaff = null;
+    render();
+  });
+}
+
+// ---- Edit own name ----
+function renderEditNameModal() {
+  return modalWrap('Edit Name', `
+    <input class="input" id="en-name" type="text" value="${escapeHtml(state.modals.editNameValue)}">
+  `, `
+    <button class="btn btn-secondary" id="en-cancel">Cancel</button>
+    <button class="btn btn-primary" id="en-save">Save</button>
+  `, 'en-close');
+}
+function attachEditNameHandlers() {
+  const $ = id => document.getElementById(id);
+  const close = () => { state.modals.editName = false; render(); };
+  $('en-close')?.addEventListener('click', close);
+  $('en-cancel')?.addEventListener('click', close);
+  $('en-name')?.addEventListener('input', e => { state.modals.editNameValue = e.target.value; });
+  $('en-save')?.addEventListener('click', async () => {
+    await updateMyName(state.modals.editNameValue);
+    state.modals.editName = false;
+    render();
+  });
+}
+
+// ---- New time off request ----
+function renderTimeOffFormModal() {
+  const f = state.modals.timeOffForm;
+  const toInput = d => d.toISOString().slice(0,10);
+  return modalWrap('Request Time Off', `
+    <label class="label">Start Date</label>
+    <input class="input" id="to-start" type="date" value="${toInput(f.startDate)}" style="margin-bottom:14px;">
+    <label class="label">End Date</label>
+    <input class="input" id="to-end" type="date" value="${toInput(f.endDate)}" style="margin-bottom:14px;">
+    <label class="label">Reason (optional)</label>
+    <textarea class="input" id="to-reason" rows="3" placeholder="e.g. family trip">${escapeHtml(f.reason||'')}</textarea>
+  `, `
+    <button class="btn btn-secondary" id="to-cancel">Cancel</button>
+    <button class="btn btn-primary" id="to-submit">Submit</button>
+  `, 'to-close');
+}
+function attachTimeOffFormHandlers() {
+  const $ = id => document.getElementById(id);
+  const f = state.modals.timeOffForm;
+  const close = () => { state.modals.timeOff = false; render(); };
+  $('to-close')?.addEventListener('click', close);
+  $('to-cancel')?.addEventListener('click', close);
+  $('to-start')?.addEventListener('change', e => { f.startDate = new Date(e.target.value + 'T00:00:00'); });
+  $('to-end')?.addEventListener('change', e => { f.endDate = new Date(e.target.value + 'T00:00:00'); });
+  $('to-reason')?.addEventListener('input', e => { f.reason = e.target.value; });
+  $('to-submit')?.addEventListener('click', async () => {
+    await submitTimeOffRequest({
+      employeeId: state.employee.id, employeeName: state.employee.name,
+      startDate: f.startDate, endDate: f.endDate, reason: f.reason || '',
+    });
+    state.modals.timeOff = false;
+    render();
+  });
+}
+
+// ---- New swap request ----
+function renderSwapFormModal() {
+  const f = state.modals.swapForm;
+  const myId = state.employee.id;
+  const myShifts = state.shifts.filter(s => s.employeeId === myId && s.published && s.startTime > new Date())
+    .sort((a,b)=>a.startTime-b.startTime);
+  const coworkers = state.employees.filter(e => e.id !== myId && e.active);
+  return modalWrap('Request Swap', `
+    <label class="label">Which shift do you want covered?</label>
+    <select class="input" id="sw-shift" style="margin-bottom:14px;">
+      <option value="">Select a shift</option>
+      ${myShifts.map(s => `<option value="${s.id}" ${f.shiftId===s.id?'selected':''}>${formatDateShort(s.date)} · ${formatTime(s.startTime)}</option>`).join('')}
+    </select>
+    <label class="label">Who will cover it?</label>
+    <select class="input" id="sw-coworker" style="margin-bottom:14px;">
+      <option value="">Select a coworker</option>
+      ${coworkers.map(c => `<option value="${c.id}" ${f.coworkerId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}
+    </select>
+    <p style="font-size:12px;color:var(--text-tertiary);margin:0;">Your coworker will need to accept, then a manager approves before it's final.</p>
+  `, `
+    <button class="btn btn-secondary" id="sw-cancel">Cancel</button>
+    <button class="btn btn-primary" id="sw-submit" ${(!f.shiftId||!f.coworkerId)?'disabled':''}>Submit</button>
+  `, 'sw-close');
+}
+function attachSwapFormHandlers() {
+  const $ = id => document.getElementById(id);
+  const f = state.modals.swapForm;
+  const close = () => { state.modals.swap = false; render(); };
+  $('sw-close')?.addEventListener('click', close);
+  $('sw-cancel')?.addEventListener('click', close);
+  $('sw-shift')?.addEventListener('change', e => { f.shiftId = e.target.value; render(); });
+  $('sw-coworker')?.addEventListener('change', e => { f.coworkerId = e.target.value; render(); });
+  $('sw-submit')?.addEventListener('click', async () => {
+    const shift = state.shifts.find(s => s.id === f.shiftId);
+    const coworker = state.employees.find(c => c.id === f.coworkerId);
+    if (!shift || !coworker) return;
+    await submitSwapRequest({
+      shiftId: shift.id,
+      shiftDescription: `${formatDateShort(shift.date)} · ${formatTime(shift.startTime)} · ${shift.role}`,
+      requestingEmployeeId: state.employee.id, requestingEmployeeName: state.employee.name,
+      coveringEmployeeId: coworker.id, coveringEmployeeName: coworker.name,
+    });
+    state.modals.swap = false;
+    render();
+  });
+}
+
+// ---- Time off detail (from manager calendar) ----
+function renderTimeOffDetailModal() {
+  const r = state.modals.timeOffDetail;
+  return modalWrap('Time Off Request', `
+    <div style="display:flex;flex-direction:column;gap:10px;font-size:14px;">
+      <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Employee</span><span>${escapeHtml(r.employeeName)}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Dates</span><span>${formatDateShort(r.startDate)} – ${formatDateShort(r.endDate)}</span></div>
+      ${r.reason ? `<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Reason</span><span>${escapeHtml(r.reason)}</span></div>` : ''}
+      <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Status</span><span class="badge" style="background:${statusColor(r.status)}22;color:${statusColor(r.status)};">${r.status}</span></div>
+    </div>
+    ${r.status === 'Pending' ? `
+      <div style="display:flex;gap:10px;margin-top:16px;">
+        <button id="tod-deny" class="btn btn-secondary" style="color:var(--red);">Deny</button>
+        <button id="tod-approve" class="btn btn-primary">Approve</button>
+      </div>
+    ` : ''}
+  `, `<button class="btn btn-secondary" id="tod-close2">Done</button>`, 'tod-close');
+}
+function attachTimeOffDetailHandlers() {
+  const close = () => { state.modals.timeOffDetail = null; render(); };
+  document.getElementById('tod-close')?.addEventListener('click', close);
+  document.getElementById('tod-close2')?.addEventListener('click', close);
+  document.getElementById('tod-approve')?.addEventListener('click', async () => {
+    const r = state.modals.timeOffDetail;
+    await updateTimeOffStatus(r.id, 'Approved', '');
+    state.modals.timeOffDetail = null;
+    render();
+  });
+  document.getElementById('tod-deny')?.addEventListener('click', async () => {
+    const r = state.modals.timeOffDetail;
+    await updateTimeOffStatus(r.id, 'Denied', '');
+    state.modals.timeOffDetail = null;
+    render();
+  });
+}
+
+// ---- Color legend ----
+function renderColorLegendModal() {
+  return modalWrap('Color Key', `
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      ${SELECTABLE_ROLES.map(r => `
+        <div style="display:flex;align-items:center;gap:12px;">
+          <span style="width:16px;height:16px;border-radius:50%;background:${roleColor(r)};display:inline-block;"></span>
+          <span>${r}</span>
+        </div>
+      `).join('')}
+    </div>
+  `, `<button class="btn btn-primary" id="cl-close2">Done</button>`, 'cl-close');
+}
+function attachColorLegendHandlers() {
+  const close = () => { state.modals.colorLegend = false; render(); };
+  document.getElementById('cl-close')?.addEventListener('click', close);
+  document.getElementById('cl-close2')?.addEventListener('click', close);
+}
+
+// ---- Generic confirm dialog ----
+function showConfirm(opts) {
+  state.modals.confirm = opts;
+  render();
+}
+function renderConfirmModal() {
+  const c = state.modals.confirm;
+  return modalWrap(c.title, `<p style="margin:0;color:var(--text-secondary);font-size:14px;line-height:1.5;">${escapeHtml(c.message||'')}</p>`, `
+    <button class="btn btn-secondary" id="cf-cancel">Cancel</button>
+    <button class="btn ${c.danger?'btn-danger':'btn-primary'}" id="cf-confirm">${c.confirmLabel||'Confirm'}</button>
+  `, 'cf-close');
+}
+function attachConfirmHandlers() {
+  const close = () => { state.modals.confirm = null; render(); };
+  document.getElementById('cf-close')?.addEventListener('click', close);
+  document.getElementById('cf-cancel')?.addEventListener('click', close);
+  document.getElementById('cf-confirm')?.addEventListener('click', async () => {
+    const c = state.modals.confirm;
+    state.modals.confirm = null;
+    if (c.onConfirm) await c.onConfirm();
+    render();
+  });
+}
+
+function attachModalHandlers() {
+  const backdrop = document.getElementById('modal-backdrop');
+  if (backdrop) {
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) { /* click outside: do nothing, require explicit close */ } });
+  }
+  if (state.modals.shiftEditor) attachShiftEditorHandlers();
+  if (state.modals.shiftDetail) attachShiftDetailHandlers();
+  if (state.modals.addStaff) attachStaffFormHandlers();
+  if (state.modals.editName) attachEditNameHandlers();
+  if (state.modals.timeOff) attachTimeOffFormHandlers();
+  if (state.modals.swap) attachSwapFormHandlers();
+  if (state.modals.timeOffDetail) attachTimeOffDetailHandlers();
+  if (state.modals.colorLegend) attachColorLegendHandlers();
+  if (state.modals.confirm) attachConfirmHandlers();
+}
+
+// ============================================================================
+// PDF EXPORT
+// ============================================================================
+function exportSchedulePDF(weekDates, roleFilter) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
+  const margin = 36;
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  let y = margin;
+
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(18);
+  doc.text(`Shirasoni — ${roleFilter || 'All Staff'} Schedule`, margin, y + 14);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(11); doc.setTextColor(120);
+  doc.text(weekRangeLabel(weekDates), margin, y + 32);
+  doc.setTextColor(0);
+  y += 50;
+
+  const nameColWidth = 110;
+  const tableWidth = pageWidth - margin*2;
+  const dayColWidth = (tableWidth - nameColWidth) / 7;
+  const rowHeight = 26;
+
+  const matchingIds = roleFilter ? new Set(state.employees.filter(e => employeeMatchesRoleFilter(e, roleFilter)).map(e=>e.id)) : null;
+  const relevant = state.shifts.filter(s => s.published && weekDates.some(d=>isSameDay(d,s.date)) && (!matchingIds || matchingIds.has(s.employeeId)));
+  const empIds = new Set(relevant.map(s=>s.employeeId));
+  const rowEmployees = state.employees.filter(e => empIds.has(e.id)).sort((a,b)=>a.name.localeCompare(b.name));
+
+  // Header row
+  doc.setFillColor(238,238,238); doc.rect(margin, y, tableWidth, 20, 'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(10);
+  weekDates.forEach((d,i) => {
+    doc.text(`${weekdayAbbr(d)} ${d.getMonth()+1}/${d.getDate()}`, margin + nameColWidth + i*dayColWidth + 6, y + 13);
+  });
+  y += 20;
+  doc.setDrawColor(200);
+  doc.rect(margin, y, tableWidth, Math.max(rowEmployees.length,1)*rowHeight);
+
+  if (!rowEmployees.length) {
+    doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(150);
+    doc.text('No published shifts for this selection.', margin+6, y+16);
+    doc.setTextColor(0);
+  }
+
+  rowEmployees.forEach((emp, ri) => {
+    if (y > pageHeight - margin - rowHeight - 60) {
+      doc.addPage(); y = margin;
+    }
+    const rowY = y + ri*rowHeight;
+    doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(0);
+    doc.text(emp.name, margin+6, rowY + rowHeight/2 + 3);
+    weekDates.forEach((d,ci) => {
+      const dayShifts = relevant.filter(s => s.employeeId===emp.id && isSameDay(s.date,d)).sort((a,b)=>a.startTime-b.startTime);
+      const cellX = margin + nameColWidth + ci*dayColWidth;
+      dayShifts.forEach((sh, si) => {
+        const segH = (rowHeight-4) / dayShifts.length;
+        const segY = rowY + 2 + si*segH;
+        const [r,g,b] = hexToRgb(roleColor(sh.role));
+        doc.setFillColor(r,g,b); doc.setGState(new doc.GState({opacity:0.18}));
+        doc.roundedRect(cellX+2, segY, dayColWidth-4, segH-1, 3, 3, 'F');
+        doc.setGState(new doc.GState({opacity:1}));
+        doc.setDrawColor(r,g,b);
+        doc.roundedRect(cellX+2, segY, dayColWidth-4, segH-1, 3, 3, 'S');
+        doc.setTextColor(r,g,b); doc.setFont('helvetica','bold'); doc.setFontSize(8);
+        doc.text(formatTime(sh.startTime), cellX + dayColWidth/2, segY + segH/2 + 3, { align: 'center' });
+      });
+    });
+    // row separator
+    doc.setDrawColor(230);
+    doc.line(margin, rowY+rowHeight, margin+tableWidth, rowY+rowHeight);
+  });
+  // vertical lines
+  for (let i=0;i<=7;i++) {
+    const x = margin + nameColWidth + i*dayColWidth;
+    doc.setDrawColor(220);
+    doc.line(x, y, x, y + Math.max(rowEmployees.length,1)*rowHeight);
+  }
+  doc.setDrawColor(220);
+  doc.line(margin, y, margin, y + Math.max(rowEmployees.length,1)*rowHeight);
+
+  // Legend
+  let legendY = y + Math.max(rowEmployees.length,1)*rowHeight + 24;
+  const rolesUsed = [...new Set(relevant.map(s=>s.role))];
+  let legendX = margin;
+  doc.setFontSize(9); doc.setFont('helvetica','normal');
+  rolesUsed.forEach(r => {
+    const [cr,cg,cb] = hexToRgb(roleColor(r));
+    doc.setFillColor(cr,cg,cb);
+    doc.circle(legendX+4, legendY-3, 4, 'F');
+    doc.setTextColor(90);
+    doc.text(r, legendX+14, legendY);
+    legendX += 14 + doc.getTextWidth(r) + 18;
+  });
+  doc.setTextColor(0);
+
+  doc.save(`Shirasoni-Schedule-${(roleFilter||'All-Staff').replace(/\//g,'-')}-${weekDates[0].toISOString().slice(0,10)}.pdf`);
+}
+function hexToRgb(hex) {
+  const v = hex.replace('#','');
+  return [parseInt(v.slice(0,2),16), parseInt(v.slice(2,4),16), parseInt(v.slice(4,6),16)];
+}
+
+// ============================================================================
+// INIT
+// ============================================================================
+render();
+</script>
+</body>
+</html>
