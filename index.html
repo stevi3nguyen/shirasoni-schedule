@@ -1655,14 +1655,18 @@ function attachEditNameHandlers() {
 }
 
 // ---- New time off request ----
+// One mini calendar — tap a day to set the start, tap another to set the
+// end (days in between highlight automatically), same behavior as the iOS
+// app's custom range calendar, rather than two separate date inputs.
 function renderTimeOffFormModal() {
   const f = state.modals.timeOffForm;
-  const toInput = d => d.toISOString().slice(0,10);
+  if (!f.calendarMonth) f.calendarMonth = new Date(f.startDate.getFullYear(), f.startDate.getMonth(), 1);
+  if (!f.rangePhase) f.rangePhase = 'first';
+
   return modalWrap('Request Time Off', `
-    <label class="label">Start Date</label>
-    <input class="input" id="to-start" type="date" value="${toInput(f.startDate)}" style="margin-bottom:14px;">
-    <label class="label">End Date</label>
-    <input class="input" id="to-end" type="date" value="${toInput(f.endDate)}" style="margin-bottom:14px;">
+    <div style="text-align:center;font-weight:600;margin-bottom:10px;">${rangeLabelFor(f.startDate, f.endDate)}</div>
+    ${renderMiniCalendar(f.calendarMonth, f.startDate, f.endDate)}
+    <p style="font-size:11px;color:var(--text-tertiary);margin:8px 0 14px;">Tap a day to start the range, then tap another day to set the end.</p>
     <label class="label">Reason (optional)</label>
     <textarea class="input" id="to-reason" rows="3" placeholder="e.g. family trip">${escapeHtml(f.reason||'')}</textarea>
   `, `
@@ -1670,15 +1674,78 @@ function renderTimeOffFormModal() {
     <button class="btn btn-primary" id="to-submit">Submit</button>
   `, 'to-close');
 }
+
+function rangeLabelFor(start, end) {
+  const fmt = d => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return isSameDay(start, end) ? fmt(start) : `${fmt(start)} – ${fmt(end)}`;
+}
+
+function renderMiniCalendar(monthDate, startDate, endDate) {
+  const year = monthDate.getFullYear(), month = monthDate.getMonth();
+  const firstOfMonth = new Date(year, month, 1);
+  const startOffset = (firstOfMonth.getDay() + 6) % 7; // Monday-first
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const monthLabel = monthDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const todayStr = new Date().toDateString();
+
+  let cells = '';
+  for (let i = 0; i < startOffset; i++) cells += `<div></div>`;
+  for (let day = 1; day <= daysInMonth; day++) {
+    const d = new Date(year, month, day);
+    const inRange = d >= stripTime(startDate) && d <= stripTime(endDate);
+    const isEndpoint = isSameDay(d, startDate) || isSameDay(d, endDate);
+    const isToday = d.toDateString() === todayStr;
+    let style = 'display:flex;align-items:center;justify-content:center;height:34px;border-radius:8px;cursor:pointer;font-size:13px;';
+    if (isEndpoint) style += 'background:var(--accent);color:white;font-weight:700;';
+    else if (inRange) style += 'background:var(--accent-dim);color:var(--accent);';
+    else if (isToday) style += 'border:1px solid var(--accent);';
+    cells += `<div data-cal-day="${d.toISOString()}" style="${style}">${day}</div>`;
+  }
+
+  return `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <button class="btn btn-ghost btn-sm" id="cal-prev-month">‹</button>
+      <div style="font-weight:600;font-size:14px;">${monthLabel}</div>
+      <button class="btn btn-ghost btn-sm" id="cal-next-month">›</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;font-size:11px;color:var(--text-tertiary);text-align:center;margin-bottom:4px;">
+      <div>Mo</div><div>Tu</div><div>We</div><div>Th</div><div>Fr</div><div>Sa</div><div>Su</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;">
+      ${cells}
+    </div>
+  `;
+}
+function stripTime(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+
 function attachTimeOffFormHandlers() {
   const $ = id => document.getElementById(id);
   const f = state.modals.timeOffForm;
   const close = () => { state.modals.timeOff = false; render(); };
   $('to-close')?.addEventListener('click', close);
   $('to-cancel')?.addEventListener('click', close);
-  $('to-start')?.addEventListener('change', e => { f.startDate = new Date(e.target.value + 'T00:00:00'); });
-  $('to-end')?.addEventListener('change', e => { f.endDate = new Date(e.target.value + 'T00:00:00'); });
   $('to-reason')?.addEventListener('input', e => { f.reason = e.target.value; });
+  $('cal-prev-month')?.addEventListener('click', () => {
+    f.calendarMonth = new Date(f.calendarMonth.getFullYear(), f.calendarMonth.getMonth() - 1, 1);
+    render();
+  });
+  $('cal-next-month')?.addEventListener('click', () => {
+    f.calendarMonth = new Date(f.calendarMonth.getFullYear(), f.calendarMonth.getMonth() + 1, 1);
+    render();
+  });
+  document.querySelectorAll('[data-cal-day]').forEach(el => {
+    el.addEventListener('click', () => {
+      const tapped = new Date(el.dataset.calDay);
+      if (f.rangePhase === 'first') {
+        f.startDate = tapped; f.endDate = tapped; f.rangePhase = 'second';
+      } else {
+        if (tapped < f.startDate) { f.endDate = f.startDate; f.startDate = tapped; }
+        else { f.endDate = tapped; }
+        f.rangePhase = 'first';
+      }
+      render();
+    });
+  });
   $('to-submit')?.addEventListener('click', async () => {
     await submitTimeOffRequest({
       employeeId: state.employee.id, employeeName: state.employee.name,
