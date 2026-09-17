@@ -190,6 +190,14 @@ const state = {
   authReady: false,
   user: null,
   employee: null,          // current signed-in employee doc {id,...}
+  // True once the employee lookup has gotten its first real answer from
+  // Firestore (found or not) — lets us tell "still loading" apart from
+  // "genuinely no profile exists for this account." Without this, deleting
+  // someone in Manage Staff (which removes their Firestore profile but not
+  // their actual login) would leave them stuck on a loading screen forever
+  // if they tried signing in again — both states look identical otherwise
+  // (just employee == null).
+  employeeLookupCompleted: false,
   employees: [],
   shifts: [],
   timeOffRequests: [],
@@ -312,12 +320,19 @@ function signOut() {
 }
 
 function loadCurrentEmployee(uid) {
+  state.employeeLookupCompleted = false;
   if (unsubEmployeeListener) unsubEmployeeListener();
   unsubEmployeeListener = db.collection('employees').where('authUID', '==', uid)
     .onSnapshot(async (snap) => {
-      if (snap.empty) { state.employee = null; render(); return; }
+      if (snap.empty) {
+        state.employee = null;
+        state.employeeLookupCompleted = true;
+        render();
+        return;
+      }
       const docSnap = snap.docs[0];
       state.employee = { id: docSnap.id, ...docSnap.data() };
+      state.employeeLookupCompleted = true;
       render();
       // One-time self-repair: if this doc's ID doesn't match the Auth UID,
       // isManager() lookups in the Firestore rules can never find it. Copy
@@ -380,6 +395,7 @@ auth.onAuthStateChanged(user => {
     startDataListeners();
   } else {
     state.employee = null;
+    state.employeeLookupCompleted = false;
     state.employees = []; state.shifts = []; state.timeOffRequests = []; state.swapRequests = [];
     stopDataListeners();
     if (unsubEmployeeListener) { unsubEmployeeListener(); unsubEmployeeListener = null; }
@@ -546,14 +562,40 @@ function render() {
     return;
   }
   if (!state.user || !state.employee) {
-    root.innerHTML = state.user && !state.employee
-      ? `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;color:var(--text-tertiary)">Loading your profile…</div>`
-      : renderAuthScreen();
-    attachAuthHandlers();
+    if (state.user && !state.employee) {
+      root.innerHTML = state.employeeLookupCompleted ? renderNoProfileFoundScreen() : renderLoadingProfileScreen();
+      if (state.employeeLookupCompleted) document.getElementById('npf-signout')?.addEventListener('click', signOut);
+    } else {
+      root.innerHTML = renderAuthScreen();
+      attachAuthHandlers();
+    }
     return;
   }
   root.innerHTML = renderApp();
   attachAppHandlers();
+}
+
+function renderLoadingProfileScreen() {
+  return `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;color:var(--text-tertiary)">Loading your profile…</div>`;
+}
+
+// Signed in successfully, but no Firestore profile was found for this
+// account — most likely a manager removed them from the roster. Without
+// this, it would look identical to "still loading" (both are just
+// employee == null) and they'd be stuck on a spinner forever with no way out.
+function renderNoProfileFoundScreen() {
+  return `
+    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;">
+      <div style="max-width:380px;text-align:center;">
+        <div style="font-size:40px;margin-bottom:12px;">⚠️</div>
+        <h2 style="margin:0 0 10px;">No Staff Profile Found</h2>
+        <p style="color:var(--text-secondary);font-size:14px;line-height:1.5;margin:0 0 20px;">
+          Your login worked, but there's no staff profile linked to this account anymore — a manager may have removed you from the roster. Contact your manager, or sign out and try a different account.
+        </p>
+        <button class="btn btn-danger" id="npf-signout">Sign Out</button>
+      </div>
+    </div>
+  `;
 }
 
 function renderAuthScreen() {
