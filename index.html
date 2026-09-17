@@ -166,7 +166,7 @@ const db = firebase.firestore();
 // ROLE CONFIG — mirrors EmployeeRole in the iOS app exactly.
 // ============================================================================
 const ALL_ROLES = ['Server','Sushi Server','Host','Sushi Chef','Teppanyaki Chef','Kitchen','Bartender','Dishwasher/Busser','Manager'];
-const SELECTABLE_ROLES = ALL_ROLES.filter(r => r !== 'Manager'); // Manager isn't a selectable shift/profile role — it's the isManager flag
+const SELECTABLE_ROLES = ALL_ROLES; // Manager is now a selectable role too — separate from the isManager access flag
 const SECTION_ORDER = ['Server','Host','Teppanyaki Chef','Sushi Chef','Kitchen','Bartender','Dishwasher/Busser','Manager'];
 const ROLE_COLORS = {
   'Server': '#3b82f6',
