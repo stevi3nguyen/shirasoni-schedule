@@ -12,6 +12,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-storage-compat.js"></script>
 
 <!-- jsPDF for the PDF export -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -46,6 +47,12 @@
   ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+
+  .avatar {
+    border-radius: 50%; flex-shrink: 0; display: inline-flex; align-items: center;
+    justify-content: center; font-weight: 700; color: white; overflow: hidden;
+    background-size: cover; background-position: center;
+  }
 
   #root { min-height: 100vh; }
 
@@ -161,13 +168,14 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
+const storage = firebase.storage();
 
 // ============================================================================
 // ROLE CONFIG — mirrors EmployeeRole in the iOS app exactly.
 // ============================================================================
-const ALL_ROLES = ['Server','Sushi Server','Host','Sushi Chef','Teppanyaki Chef','Kitchen','Bartender','Dishwasher/Busser','Manager'];
+const ALL_ROLES = ['Server','Sushi Server','Host','Sushi Chef','Teppanyaki Chef','Kitchen','Bartender','Dishwasher','Busser','Manager'];
 const SELECTABLE_ROLES = ALL_ROLES; // Manager is now a selectable role too — separate from the isManager access flag
-const SECTION_ORDER = ['Server','Host','Teppanyaki Chef','Sushi Chef','Kitchen','Bartender','Dishwasher/Busser','Manager'];
+const SECTION_ORDER = ['Server','Host','Teppanyaki Chef','Sushi Chef','Kitchen','Bartender','Dishwasher','Manager'];
 const ROLE_COLORS = {
   'Server': '#3b82f6',
   'Sushi Server': '#06b6d4',
@@ -176,11 +184,41 @@ const ROLE_COLORS = {
   'Teppanyaki Chef': '#ec4899',
   'Kitchen': '#92400e',
   'Bartender': '#22c55e',
-  'Dishwasher/Busser': '#8b8b8b',
+  'Dishwasher': '#8b8b8b',
+  'Busser': '#8c7a5e',
   'Manager': '#6366f1',
 };
-function sectionRole(role) { return role === 'Sushi Server' ? 'Server' : role; }
+function sectionRole(role) {
+  if (role === 'Sushi Server') return 'Server';
+  if (role === 'Busser') return 'Dishwasher';
+  return role;
+}
 function roleColor(role) { return ROLE_COLORS[role] || '#8b8b8b'; }
+
+// ============================================================================
+// AVATARS — shows the person's uploaded photo if they have one, otherwise a
+// colored circle with their initials (same idea as Slack/Gmail defaults, and
+// matches the iOS app's AvatarView). Deterministic color from the name so
+// the same person always gets the same color everywhere.
+// ============================================================================
+function initialsFor(name) {
+  const letters = (name || '').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+  return letters || '?';
+}
+function avatarColorFor(name) {
+  let hash = 0;
+  for (const ch of (name || '')) hash += ch.charCodeAt(0);
+  const hue = hash % 360;
+  return `hsl(${hue}, 45%, 45%)`;
+}
+function avatarHtml(name, photoURL, size) {
+  size = size || 36;
+  const fontSize = Math.round(size * 0.4);
+  if (photoURL) {
+    return `<div class="avatar" style="width:${size}px;height:${size}px;background-image:url('${escapeHtml(photoURL)}');"></div>`;
+  }
+  return `<div class="avatar" style="width:${size}px;height:${size}px;font-size:${fontSize}px;background:${avatarColorFor(name)};">${escapeHtml(initialsFor(name))}</div>`;
+}
 const MAX_SHIFTS_PER_DAY = 2;
 
 // ============================================================================
@@ -203,6 +241,7 @@ const state = {
   timeOffRequests: [],
   swapRequests: [],
   authError: null,
+  profilePhotoUploading: false,
   authMode: 'signin',      // 'signin' | 'signup'
 
   tab: 'schedule',         // schedule | requests | build | approvals | profile
@@ -215,6 +254,7 @@ const state = {
     shiftEditor: null,     // { date, existingShift, presetEmployee }
     shiftEditorForm: {},
     shiftDetail: null,     // shift being viewed (staff read-only)
+    employeePreview: null, // employee whose photo/name/role preview is open
     addStaff: null,        // { existingEmployee } or {} for add
     staffForm: {},
     editName: false,
@@ -289,7 +329,7 @@ function escapeHtml(str) {
 let unsubEmployeeListener = null;
 let unsubDataListeners = [];
 
-async function signUp(email, password, name, phone, role) {
+async function signUp(email, password, name, role) {
   state.authError = null;
   try {
     const cred = await auth.createUserWithEmailAndPassword(email, password);
@@ -297,9 +337,13 @@ async function signUp(email, password, name, phone, role) {
     // iOS app's convention so Firestore rules (isManager() lookup) work correctly.
     await db.collection('employees').doc(cred.user.uid).set({
       authUID: cred.user.uid,
-      name, phone, role,
+      name, phone: '', role,
       isManager: false, // manager status can only be granted by an existing manager, never at signup
       active: true,
+      // New self-signups start out pending — a manager has to approve them
+      // in the Approvals tab before they can see the schedule. Staff a
+      // manager adds directly in Manage Staff skip this (see addEmployee).
+      approved: false,
     });
   } catch (e) {
     state.authError = e.message;
@@ -514,7 +558,9 @@ async function deleteSwapRequest(id) {
 // ============================================================================
 async function addEmployee(name, role, isManager) {
   await db.collection('employees').add({
-    authUID: 'manual-' + uuid(), name, phone: '', role, isManager: !!isManager, active: true,
+    // A manager is adding this person directly — there's no self-signup to
+    // gate, so they're approved immediately.
+    authUID: 'manual-' + uuid(), name, phone: '', role, isManager: !!isManager, active: true, approved: true,
   });
 }
 async function updateEmployee(id, name, role, isManager) {
@@ -523,11 +569,46 @@ async function updateEmployee(id, name, role, isManager) {
 async function deleteEmployee(id) {
   await db.collection('employees').doc(id).delete();
 }
+// Whether a manager has approved this account for schedule access. Missing
+// field (undefined) means this doc predates the feature — treated as
+// already approved so nobody currently using the app gets locked out. Only
+// a brand-new self-signup explicitly has approved === false.
+function isApproved(employee) {
+  return employee?.approved !== false;
+}
+function pendingApprovalEmployees() {
+  return state.employees.filter(e => e.approved === false);
+}
+async function approveEmployee(id) {
+  await db.collection('employees').doc(id).update({ approved: true });
+}
 async function updateMyName(name) {
   if (!state.employee) return;
   const trimmed = (name || '').trim();
   if (!trimmed) return;
   await db.collection('employees').doc(state.employee.id).update({ name: trimmed });
+}
+
+// Uploads a new profile photo to Firebase Storage at
+// "profilePhotos/{authUID}.jpg" (keyed off the signed-in Auth UID, matching
+// the iOS app, so the Storage security rule can check "is this your own
+// file" directly), then saves the download URL onto the employee doc.
+async function uploadProfilePhoto(file) {
+  if (!state.employee || !state.user || !file) return;
+  state.profilePhotoUploading = true;
+  render();
+  try {
+    const ref = storage.ref().child(`profilePhotos/${state.user.uid}.jpg`);
+    await ref.put(file, { contentType: 'image/jpeg' });
+    const url = await ref.getDownloadURL();
+    await db.collection('employees').doc(state.employee.id).update({ photoURL: url });
+  } catch (e) {
+    state.authError = null;
+    alert("Couldn't upload photo: " + e.message);
+  } finally {
+    state.profilePhotoUploading = false;
+    render();
+  }
 }
 
 // ============================================================================
@@ -550,6 +631,7 @@ const ICONS = {
   trash: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></svg>`,
   sun: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`,
   swap: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m17 2 4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3"/></svg>`,
+  camera: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2"><path d="M3 9a2 2 0 0 1 2-2h1.5l1-1.5h9l1 1.5H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><circle cx="12" cy="13" r="3.5"/></svg>`,
 };
 
 // ============================================================================
@@ -571,8 +653,30 @@ function render() {
     }
     return;
   }
+  if (!isApproved(state.employee)) {
+    root.innerHTML = renderPendingApprovalScreen();
+    document.getElementById('pa-signout')?.addEventListener('click', signOut);
+    return;
+  }
   root.innerHTML = renderApp();
   attachAppHandlers();
+}
+
+// Signed up successfully, but no manager has approved the account yet — no
+// schedule access until they do.
+function renderPendingApprovalScreen() {
+  return `
+    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;">
+      <div style="max-width:380px;text-align:center;">
+        <div style="font-size:40px;margin-bottom:12px;">⏳</div>
+        <h2 style="margin:0 0 10px;">Waiting on Approval</h2>
+        <p style="color:var(--text-secondary);font-size:14px;line-height:1.5;margin:0 0 20px;">
+          Your account was created, but a manager needs to approve it before you can see the schedule. Check back soon, or ask your manager to approve you in the app.
+        </p>
+        <button class="btn btn-danger" id="pa-signout">Sign Out</button>
+      </div>
+    </div>
+  `;
 }
 
 function renderLoadingProfileScreen() {
@@ -623,15 +727,13 @@ function renderAuthScreen() {
         </div>
       ` : `
         <div class="card" style="padding:20px;">
-          <label class="label">Full name</label>
+          <label class="label">Name</label>
           <input class="input" id="su-name" type="text" style="margin-bottom:12px;">
-          <label class="label">Phone</label>
-          <input class="input" id="su-phone" type="tel" style="margin-bottom:12px;">
           <label class="label">Role</label>
           <select class="input" id="su-role" style="margin-bottom:16px;">
             ${SELECTABLE_ROLES.map(r => `<option value="${r}">${r}</option>`).join('')}
           </select>
-          <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 16px;">A manager can give you manager access afterward, if needed — it's not something you can set for yourself here.</p>
+          <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 16px;">A manager can give you manager access afterward, if needed — it's not something you can set for yourself here. A manager will also need to approve your account before you can see the schedule.</p>
           <label class="label">Email</label>
           <input class="input" id="su-email" type="email" style="margin-bottom:12px;" autocomplete="username">
           <label class="label">Password (6+ characters)</label>
@@ -653,7 +755,7 @@ function attachAuthHandlers() {
     $('auth-password')?.addEventListener('keydown', e => { if (e.key === 'Enter') $('btn-signin').click(); });
   } else {
     $('btn-signup')?.addEventListener('click', () => signUp(
-      $('su-email').value.trim(), $('su-password').value, $('su-name').value.trim(), $('su-phone').value.trim(), $('su-role').value
+      $('su-email').value.trim(), $('su-password').value, $('su-name').value.trim(), $('su-role').value
     ));
     $('btn-goto-signin')?.addEventListener('click', () => { state.authMode = 'signin'; state.authError = null; render(); });
   }
@@ -670,7 +772,7 @@ function pendingResponseCount() {
 function pendingApprovalCount() {
   const pendingTimeOff = state.timeOffRequests.filter(r => r.status === 'Pending').length;
   const pendingSwaps = state.swapRequests.filter(s => s.status === 'Waiting on Manager').length;
-  return pendingTimeOff + pendingSwaps;
+  return pendingTimeOff + pendingSwaps + pendingApprovalEmployees().length;
 }
 
 function renderApp() {
@@ -727,14 +829,45 @@ function attachAppHandlers() {
   attachProfileHandlers();
   attachManageStaffHandlers();
   attachModalHandlers();
+  attachEmployeePreviewHandlers();
+}
+
+// Tapping a name anywhere on the schedule (grid name column, a shift row,
+// or a shift's detail sheet) opens a small read-only preview of that
+// person's photo, name, and role. Shared across whichever tab is currently
+// rendered, since only one tab's markup exists in the DOM at a time.
+function attachEmployeePreviewHandlers() {
+  document.querySelectorAll('[data-employee-preview]').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const emp = state.employees.find(x => x.id === el.dataset.employeePreview);
+      if (emp) { state.modals.employeePreview = emp; render(); }
+    });
+  });
 }
 
 // ============================================================================
 // SCHEDULE TAB (staff-facing, read-only)
 // ============================================================================
+// Non-manager staff only ever see their own SECTION's schedule in this tab
+// (e.g. a Server sees every Server/Sushi Server shift, but no Host or
+// Kitchen shifts) — they can't browse other groups. Managers keep full
+// visibility here (and in Build Schedule) since they need the whole picture.
+function isRestrictedToOwnSchedule() {
+  return !state.employee?.isManager;
+}
+// The role filter actually in effect: a manager's own chip selection, or —
+// for restricted staff — their own profile role, locked in regardless of
+// what schedule.roleFilter holds (its chips are hidden for them anyway).
+function effectiveScheduleRoleFilter(roleFilter) {
+  return isRestrictedToOwnSchedule() ? (state.employee?.role || null) : roleFilter;
+}
+
 function renderScheduleTab() {
   const s = state.schedule;
   const weekDates = getWeekDates(s.anchorDate);
+  const restricted = isRestrictedToOwnSchedule();
+  const effectiveFilter = effectiveScheduleRoleFilter(s.roleFilter);
   return `
     <div class="topbar">
       <div style="display:flex;align-items:center;gap:10px;">
@@ -748,10 +881,10 @@ function renderScheduleTab() {
     </div>
     <div class="content">
       ${renderWeekNav(weekDates, 'sched-prev-week', 'sched-next-week')}
-      ${renderRoleChips(s.roleFilter, 'sched-role-chip')}
+      ${restricted ? '' : renderRoleChips(s.roleFilter, 'sched-role-chip')}
       ${s.viewMode === 'grid'
-        ? renderScheduleGrid(weekDates, s.roleFilter, false)
-        : renderScheduleList(weekDates, s)}
+        ? renderScheduleGrid(weekDates, effectiveFilter, false)
+        : renderScheduleList(weekDates, { ...s, roleFilter: effectiveFilter })}
     </div>
   `;
 }
@@ -769,7 +902,7 @@ function renderRoleChips(activeRole, dataAttr) {
   return `
     <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:14px;-webkit-overflow-scrolling:touch;">
       <button class="chip ${!activeRole?'active':''}" data-${dataAttr}="">All</button>
-      ${SELECTABLE_ROLES.filter(r => r !== 'Sushi Server').map(r =>
+      ${SELECTABLE_ROLES.filter(r => r !== 'Sushi Server' && r !== 'Busser').map(r =>
         `<button class="chip ${activeRole===r?'active':''}" data-${dataAttr}="${r}">${r}</button>`
       ).join('')}
     </div>
@@ -820,7 +953,12 @@ function renderScheduleGrid(weekDates, roleFilter, managerMode, onCellAction) {
 
   function rowHtml(emp) {
     return `<tr>
-      <td class="name-cell">${escapeHtml(emp.name)}</td>
+      <td class="name-cell">
+        <button data-employee-preview="${emp.id}" style="background:none;border:none;color:inherit;font:inherit;cursor:pointer;display:flex;align-items:center;gap:6px;padding:0;">
+          ${avatarHtml(emp.name, emp.photoURL, 20)}
+          <span>${escapeHtml(emp.name)}</span>
+        </button>
+      </td>
       ${weekDates.map(d => cellHtml(emp, d)).join('')}
     </tr>`;
   }
@@ -882,9 +1020,11 @@ function renderScheduleList(weekDates, s) {
 function renderShiftRow(sh, divider) {
   const color = roleColor(sh.role);
   const mine = sh.employeeId === state.employee?.id;
+  const emp = state.employees.find(e => e.id === sh.employeeId);
   return `
     <div data-shift-row="${sh.id}" style="display:flex;align-items:center;gap:12px;padding:14px 16px;${divider?'border-bottom:1px solid var(--border);':''}cursor:pointer;${mine?'background:rgba(232,73,29,0.06);':''}">
       <div style="width:4px;align-self:stretch;background:${color};border-radius:2px;"></div>
+      ${avatarHtml(sh.employeeName, emp?.photoURL, 32)}
       <div style="flex:1;min-width:0;">
         <div style="font-weight:${mine?'700':'500'};">${escapeHtml(sh.employeeName)}</div>
         <div style="color:var(--text-secondary);font-size:13px;">${formatTime(sh.startTime)}</div>
@@ -1233,6 +1373,7 @@ function renderApprovalsTab() {
   const a = state.approvals;
   const pendingTimeOff = state.timeOffRequests.filter(r => r.status === 'Pending');
   const pendingSwaps = state.swapRequests.filter(s => s.status === 'Waiting on Manager');
+  const pendingStaff = pendingApprovalEmployees();
 
   return `
     <div class="topbar"><h1 class="page-title">Approvals</h1></div>
@@ -1242,8 +1383,14 @@ function renderApprovalsTab() {
         <button class="chip ${a.viewMode==='calendar'?'active':''}" data-appr-mode="calendar" style="background:${a.viewMode==='calendar'?'var(--accent-dim)':'transparent'};">Calendar</button>
       </div>
       ${a.viewMode === 'list' ? `
-        ${!pendingTimeOff.length && !pendingSwaps.length ? `
+        ${!pendingTimeOff.length && !pendingSwaps.length && !pendingStaff.length ? `
           <div class="card" style="padding:50px 20px;text-align:center;color:var(--text-tertiary);">All caught up — no pending requests.</div>
+        ` : ''}
+        ${pendingStaff.length ? `
+          <h3 style="font-size:13px;color:var(--text-secondary);margin:0 0 10px;">New Sign-Ups Awaiting Approval</h3>
+          <div class="card" style="margin-bottom:20px;overflow:hidden;">
+            ${pendingStaff.map((e,i) => renderStaffApprovalRow(e, i<pendingStaff.length-1)).join('')}
+          </div>
         ` : ''}
         ${pendingTimeOff.length ? `
           <h3 style="font-size:13px;color:var(--text-secondary);margin:0 0 10px;">Time Off Requests</h3>
@@ -1262,6 +1409,21 @@ function renderApprovalsTab() {
   `;
 }
 
+function renderStaffApprovalRow(e, divider) {
+  return `
+    <div style="display:flex;align-items:center;gap:12px;padding:14px 16px;${divider?'border-bottom:1px solid var(--border);':''}">
+      ${avatarHtml(e.name, e.photoURL, 36)}
+      <div style="flex:1;">
+        <div style="font-weight:600;font-size:14px;">${escapeHtml(e.name)}</div>
+        <div style="color:var(--text-secondary);font-size:13px;">${e.role}</div>
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button data-staff-deny="${e.id}" class="btn btn-sm btn-secondary" style="color:var(--red);">Deny</button>
+        <button data-staff-approve="${e.id}" class="btn btn-sm btn-primary">Approve</button>
+      </div>
+    </div>
+  `;
+}
 function renderTimeOffApprovalRow(r, divider) {
   return `
     <div style="padding:14px 16px;${divider?'border-bottom:1px solid var(--border);':''}">
@@ -1348,6 +1510,18 @@ function attachApprovalsHandlers() {
     const req = state.timeOffRequests.find(r => r.id === el.dataset.timeoffCell);
     if (req) { state.modals.timeOffDetail = req; render(); }
   }));
+  document.querySelectorAll('[data-staff-approve]').forEach(el => el.addEventListener('click', () => {
+    approveEmployee(el.dataset.staffApprove);
+  }));
+  document.querySelectorAll('[data-staff-deny]').forEach(el => el.addEventListener('click', () => {
+    const emp = state.employees.find(e => e.id === el.dataset.staffDeny);
+    showConfirm({
+      title: `Deny ${emp?.name || 'this account'}?`,
+      message: "They'll be removed from the roster and won't be able to sign in with this account anymore.",
+      confirmLabel: 'Deny & Remove', danger: true,
+      onConfirm: () => deleteEmployee(el.dataset.staffDeny),
+    });
+  }));
 }
 
 // ============================================================================
@@ -1356,18 +1530,29 @@ function attachApprovalsHandlers() {
 function renderProfileTab() {
   const e = state.employee;
   const isManager = !!e?.isManager;
+  const uploading = !!state.profilePhotoUploading;
   return `
     <div class="topbar"><h1 class="page-title">Profile</h1></div>
     <div class="content">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:8px;margin-bottom:20px;">
+        <label for="profile-photo-input" style="position:relative;cursor:${uploading?'default':'pointer'};">
+          ${avatarHtml(e.name, e.photoURL, 88)}
+          ${uploading ? `
+            <div style="position:absolute;inset:0;border-radius:50%;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;color:white;font-size:11px;">…</div>
+          ` : `
+            <div style="position:absolute;bottom:0;right:0;width:26px;height:26px;border-radius:50%;background:var(--accent);border:2px solid var(--bg);display:flex;align-items:center;justify-content:center;">${ICONS.camera}</div>
+          `}
+        </label>
+        <input type="file" id="profile-photo-input" accept="image/*" style="display:none;" ${uploading ? 'disabled' : ''}>
+        <span style="color:var(--text-tertiary);font-size:12px;">Tap to change photo</span>
+      </div>
+
       <div class="card" style="margin-bottom:8px;overflow:hidden;">
         <button id="profile-edit-name" class="btn-block" style="display:flex;justify-content:space-between;padding:14px 16px;background:none;border:none;color:var(--text);text-align:left;border-bottom:1px solid var(--border);">
           <span style="color:var(--text-secondary);">Name</span><span style="font-weight:600;">${escapeHtml(e.name)}</span>
         </button>
-        <div style="display:flex;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border);">
-          <span style="color:var(--text-secondary);">Role</span><span>${e.role}</span>
-        </div>
         <div style="display:flex;justify-content:space-between;padding:14px 16px;${isManager?'border-bottom:1px solid var(--border);':''}">
-          <span style="color:var(--text-secondary);">Phone</span><span>${escapeHtml(e.phone || '—')}</span>
+          <span style="color:var(--text-secondary);">Role</span><span>${e.role}</span>
         </div>
         ${isManager ? `<div style="display:flex;justify-content:space-between;padding:14px 16px;"><span style="color:var(--text-secondary);">Access</span><span>Manager</span></div>` : ''}
       </div>
@@ -1390,6 +1575,10 @@ function attachProfileHandlers() {
   $('profile-edit-name')?.addEventListener('click', () => { state.modals.editName = true; state.modals.editNameValue = state.employee.name; render(); });
   $('profile-signout')?.addEventListener('click', signOut);
   $('profile-manage-staff')?.addEventListener('click', () => { state.tab = 'manageStaff'; render(); });
+  $('profile-photo-input')?.addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (file) uploadProfilePhoto(file);
+  });
 }
 
 // ============================================================================
@@ -1409,12 +1598,15 @@ function renderManageStaffTab() {
       <div class="card" style="overflow:hidden;">
         ${list.map((e,i) => `
           <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;${i<list.length-1?'border-bottom:1px solid var(--border);':''}">
-            <button data-ms-edit="${e.id}" style="background:none;border:none;text-align:left;color:var(--text);cursor:pointer;flex:1;">
-              <div style="display:flex;align-items:center;gap:8px;">
-                <span style="font-weight:600;">${escapeHtml(e.name)}</span>
-                ${e.isManager ? `<span class="badge" style="background:#6366f122;color:#6366f1;">Manager</span>` : ''}
+            <button data-ms-edit="${e.id}" style="background:none;border:none;text-align:left;color:var(--text);cursor:pointer;flex:1;display:flex;align-items:center;gap:12px;">
+              ${avatarHtml(e.name, e.photoURL, 36)}
+              <div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span style="font-weight:600;">${escapeHtml(e.name)}</span>
+                  ${e.isManager ? `<span class="badge" style="background:#6366f122;color:#6366f1;">Manager</span>` : ''}
+                </div>
+                <div style="color:var(--text-secondary);font-size:13px;">${e.role}</div>
               </div>
-              <div style="color:var(--text-secondary);font-size:13px;">${e.role}</div>
             </button>
             <button data-ms-delete="${e.id}" style="background:none;border:none;color:var(--red);padding:6px;cursor:pointer;">${ICONS.trash}</button>
           </div>
@@ -1470,6 +1662,7 @@ function renderModals() {
   let html = '';
   if (m.shiftEditor) html += renderShiftEditorModal();
   if (m.shiftDetail) html += renderShiftDetailModal();
+  if (m.employeePreview) html += renderEmployeePreviewModal();
   if (m.addStaff) html += renderStaffFormModal();
   if (m.editName) html += renderEditNameModal();
   if (m.timeOff) html += renderTimeOffFormModal();
@@ -1575,7 +1768,11 @@ function attachShiftEditorHandlers() {
 // ---- Shift detail (staff read-only) ----
 function renderShiftDetailModal() {
   const sh = state.modals.shiftDetail;
+  const emp = state.employees.find(e => e.id === sh.employeeId);
   return modalWrap('Shift Details', `
+    <div style="display:flex;justify-content:center;margin-bottom:14px;">
+      ${avatarHtml(sh.employeeName, emp?.photoURL, 64)}
+    </div>
     <div style="display:flex;flex-direction:column;gap:10px;font-size:14px;">
       <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Employee</span><span>${escapeHtml(sh.employeeName)}</span></div>
       <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Role</span><span>${sh.role}</span></div>
@@ -1590,6 +1787,26 @@ function attachShiftDetailHandlers() {
   const close = () => { state.modals.shiftDetail = null; render(); };
   document.getElementById('sd-close')?.addEventListener('click', close);
   document.getElementById('sd-close2')?.addEventListener('click', close);
+}
+
+// ---- Employee profile preview (tapping a name anywhere on the schedule) ----
+function renderEmployeePreviewModal() {
+  const emp = state.modals.employeePreview;
+  return modalWrap('Profile', `
+    <div style="display:flex;flex-direction:column;align-items:center;gap:10px;padding:10px 0;">
+      ${avatarHtml(emp.name, emp.photoURL, 100)}
+      <div style="font-size:18px;font-weight:700;">${escapeHtml(emp.name)}</div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="color:var(--text-secondary);font-size:14px;">${emp.role}</span>
+        ${emp.isManager ? `<span class="badge" style="background:#6366f122;color:#6366f1;">Manager</span>` : ''}
+      </div>
+    </div>
+  `, `<button class="btn btn-primary" id="ep-close2">Done</button>`, 'ep-close');
+}
+function attachEmployeePreviewModalHandlers() {
+  const close = () => { state.modals.employeePreview = null; render(); };
+  document.getElementById('ep-close')?.addEventListener('click', close);
+  document.getElementById('ep-close2')?.addEventListener('click', close);
 }
 
 // ---- Add/edit staff ----
@@ -1889,6 +2106,7 @@ function attachModalHandlers() {
   }
   if (state.modals.shiftEditor) attachShiftEditorHandlers();
   if (state.modals.shiftDetail) attachShiftDetailHandlers();
+  if (state.modals.employeePreview) attachEmployeePreviewModalHandlers();
   if (state.modals.addStaff) attachStaffFormHandlers();
   if (state.modals.editName) attachEditNameHandlers();
   if (state.modals.timeOff) attachTimeOffFormHandlers();
