@@ -175,7 +175,7 @@ const storage = firebase.storage();
 // ============================================================================
 const ALL_ROLES = ['Server','Sushi Server','Host','Sushi Chef','Teppanyaki Chef','Kitchen','Bartender','Dishwasher','Busser','Manager'];
 const SELECTABLE_ROLES = ALL_ROLES; // Manager is now a selectable role too — separate from the isManager access flag
-const SECTION_ORDER = ['Server','Teppanyaki Chef','Sushi Chef','Kitchen','Bartender','Dishwasher','Manager'];
+const SECTION_ORDER = ['Server','Teppanyaki Chef','Sushi Chef','Kitchen','Bartender','Dishwasher'];
 const ROLE_COLORS = {
   'Server': '#3b82f6',
   'Sushi Server': '#06b6d4',
@@ -189,9 +189,17 @@ const ROLE_COLORS = {
   'Manager': '#6366f1',
 };
 function sectionRole(role) {
-  if (role === 'Sushi Server' || role === 'Host') return 'Server';
+  if (role === 'Sushi Server' || role === 'Host' || role === 'Manager') return 'Server';
   if (role === 'Busser') return 'Dishwasher';
   return role;
+}
+// Secondary sort key used only to order people WITHIN a merged section —
+// e.g. inside Server: plain Servers/Sushi Servers first, then Hosts, then
+// Managers. Purely cosmetic; doesn't affect which section they're grouped in.
+function sectionSubOrder(role) {
+  if (role === 'Host') return 1;
+  if (role === 'Manager') return 2;
+  return 0;
 }
 function roleColor(role) { return ROLE_COLORS[role] || '#8b8b8b'; }
 
@@ -906,7 +914,7 @@ function renderRoleChips(activeRole, dataAttr) {
   return `
     <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:14px;-webkit-overflow-scrolling:touch;">
       <button class="chip ${!activeRole?'active':''}" data-${dataAttr}="">All</button>
-      ${SELECTABLE_ROLES.filter(r => r !== 'Sushi Server' && r !== 'Busser' && r !== 'Host').map(r =>
+      ${SELECTABLE_ROLES.filter(r => r !== 'Sushi Server' && r !== 'Busser' && r !== 'Host' && r !== 'Manager').map(r =>
         `<button class="chip ${activeRole===r?'active':''}" data-${dataAttr}="${r}">${r}</button>`
       ).join('')}
     </div>
@@ -956,9 +964,10 @@ function renderScheduleGrid(weekDates, roleFilter, managerMode, onCellAction) {
   }
 
   function rowHtml(emp) {
-    return `<tr>
+    const isMe = state.employee && emp.id === state.employee.id;
+    return `<tr${isMe ? ' style="background:var(--accent-dim);"' : ''}>
       <td class="name-cell">
-        <button data-employee-preview="${emp.id}" style="background:none;border:none;color:inherit;font:inherit;cursor:pointer;display:flex;align-items:center;gap:6px;padding:0;">
+        <button data-employee-preview="${emp.id}" style="background:none;border:none;color:${isMe?'var(--accent)':'inherit'};font:inherit;font-weight:${isMe?'700':'inherit'};cursor:pointer;display:flex;align-items:center;gap:6px;padding:0;">
           ${avatarHtml(emp.name, emp.photoURL, 20)}
           <span>${escapeHtml(emp.name)}</span>
         </button>
@@ -975,6 +984,9 @@ function renderScheduleGrid(weekDates, roleFilter, managerMode, onCellAction) {
     employees.forEach(e => {
       const sec = sectionRole(e.role);
       (grouped[sec] = grouped[sec] || []).push(e);
+    });
+    Object.values(grouped).forEach(list => {
+      list.sort((a,b) => sectionSubOrder(a.role) - sectionSubOrder(b.role) || a.name.localeCompare(b.name));
     });
     bodyRows = SECTION_ORDER.filter(sec => grouped[sec]?.length).map(sec => `
       <tr class="section-row"><td colspan="8">${sec}</td></tr>
