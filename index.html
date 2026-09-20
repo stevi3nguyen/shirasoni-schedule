@@ -498,6 +498,7 @@ async function copyPreviousWeek(currentWeekStart) {
     await addShift({
       employeeId: s.employeeId, employeeName: s.employeeName, role: s.role,
       date: newDate, startTime: newStart, notes: s.notes || '', published: false,
+      vacuumDuty: !!s.vacuumDuty,
     });
   }
   return prevShifts.length;
@@ -632,6 +633,7 @@ const ICONS = {
   sun: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`,
   swap: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m17 2 4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3"/></svg>`,
   camera: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2"><path d="M3 9a2 2 0 0 1 2-2h1.5l1-1.5h9l1 1.5H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><circle cx="12" cy="13" r="3.5"/></svg>`,
+  vacuum: `<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-1px;"><path d="M12 2a3 3 0 0 1 3 3c0 1-.5 1.8-1.2 2.4A5 5 0 0 1 17 12a1 1 0 1 1-2 0 3 3 0 0 0-3-3 1 1 0 0 1-1-1V6.8A2 2 0 0 1 9 5a3 3 0 0 1 3-3Zm-1 11a1 1 0 0 1 1 1v1a1 1 0 1 1-2 0v-1a1 1 0 0 1 1-1Zm4.2.8a1 1 0 0 1 1.4 0l.7.8a1 1 0 1 1-1.4 1.4l-.7-.8a1 1 0 0 1 0-1.4ZM7.4 13.8a1 1 0 0 1 1.4 1.4l-.7.8a1 1 0 1 1-1.4-1.4Z"/></svg>`,
 };
 
 // ============================================================================
@@ -944,7 +946,7 @@ function renderScheduleGrid(weekDates, roleFilter, managerMode, onCellAction) {
     let inner = dayShifts.map(sh => {
       const color = roleColor(sh.role);
       const opacity = sh.published ? '2a' : '14';
-      return `<div class="shift-chip" style="background:${color}${opacity};color:${color};border-color:${color}55;" data-shift-chip="${sh.id}">${formatTime(sh.startTime)}</div>`;
+      return `<div class="shift-chip" style="background:${color}${opacity};color:${color};border-color:${color}55;" data-shift-chip="${sh.id}">${formatTime(sh.startTime)}${sh.vacuumDuty ? ' ' + ICONS.vacuum : ''}</div>`;
     }).join('<div style="height:2px"></div>');
     if (managerMode && dayShifts.length < MAX_SHIFTS_PER_DAY) {
       if (inner) inner += '<div style="height:2px"></div>';
@@ -1173,7 +1175,7 @@ function attachBuildHandlers() {
 
   $('menu-add-shift')?.addEventListener('click', () => {
     state.modals.shiftEditor = { date: b.selectedDate || getWeekDates(b.anchorDate)[0], existingShift: null };
-    state.modals.shiftEditorForm = {};
+    state.modals.shiftEditorForm = { vacuumDuty: false };
     render();
   });
   $('menu-copy-week')?.addEventListener('click', async () => {
@@ -1251,12 +1253,14 @@ function openShiftEditor(date, existingShift, presetEmployee) {
       minute: existingShift.startTime.getMinutes(),
       isPM: existingShift.startTime.getHours() >= 12,
       notes: existingShift.notes || '', published: existingShift.published,
+      vacuumDuty: !!existingShift.vacuumDuty,
     };
   } else {
     state.modals.shiftEditorForm = {
       employeeId: presetEmployee ? presetEmployee.id : '',
       role: presetEmployee ? presetEmployee.role : SELECTABLE_ROLES[0],
       hour: 4, minute: 0, isPM: true, notes: '', published: false,
+      vacuumDuty: false,
     };
   }
   render();
@@ -1348,7 +1352,9 @@ function renderSwapRow(s, myId, divider) {
 function attachRequestsHandlers() {
   if (state.tab !== 'requests') return;
   const $ = id => document.getElementById(id);
-  $('req-timeoff-btn')?.addEventListener('click', () => { state.modals.timeOff = true; state.modals.timeOffForm = { startDate: new Date(), endDate: new Date(), reason: '' }; render(); });
+  $('req-timeoff-btn')?.addEventListener('click', () => {
+    showAlert('Request Time Off', 'Request time off feature is currently disabled. You are not allowed to take time off!! Lol jk just put your name on the calendar in the back like always if you need to request time off.\n\n- Stevie');
+  });
   $('req-swap-btn')?.addEventListener('click', () => { state.modals.swap = true; state.modals.swapForm = {}; render(); });
 
   document.querySelectorAll('[data-cancel-timeoff]').forEach(el => el.addEventListener('click', () => cancelTimeOffRequest(el.dataset.cancelTimeoff)));
@@ -1712,14 +1718,22 @@ function renderModals() {
   if (m.timeOffDetail) html += renderTimeOffDetailModal();
   if (m.colorLegend) html += renderColorLegendModal();
   if (m.confirm) html += renderConfirmModal();
+  if (m.alert) html += renderAlertModal();
   return html;
 }
 
 // ---- Shift editor ----
+// Whoever else is already on vacuum duty the same calendar day, if anyone —
+// excludes the shift currently being edited. Mirrors the iOS app's rule that
+// only one person per night can be on closing vacuum duty.
+function otherVacuumShiftOnDate(date, excludingShiftId) {
+  return state.shifts.find(s => s.vacuumDuty && isSameDay(s.date, date) && s.id !== excludingShiftId) || null;
+}
 function renderShiftEditorModal() {
-  const { existingShift } = state.modals.shiftEditor;
+  const { date, existingShift } = state.modals.shiftEditor;
   const f = state.modals.shiftEditorForm;
   const activeEmployees = state.employees.filter(e => e.active);
+  const otherVacuum = f.vacuumDuty ? otherVacuumShiftOnDate(date, existingShift?.id) : null;
   return modalWrap(existingShift ? 'Edit Shift' : 'Add Shift', `
     <label class="label">Employee</label>
     <select class="input" id="se-employee" style="margin-bottom:14px;">
@@ -1743,9 +1757,17 @@ function renderShiftEditorModal() {
     <p style="font-size:12px;color:var(--text-tertiary);margin:0 0 14px;">No end time needed — shift lengths vary too much in practice.</p>
     <label class="label">Notes (optional)</label>
     <input class="input" id="se-notes" type="text" value="${escapeHtml(f.notes||'')}" placeholder="e.g. training shift" style="margin-bottom:14px;">
-    <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;">
+    <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;margin-bottom:14px;">
       <input type="checkbox" id="se-published" ${f.published?'checked':''}> Publish immediately (staff will be notified)
     </label>
+    <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;">
+      <input type="checkbox" id="se-vacuum" ${f.vacuumDuty?'checked':''}> Closing Vacuum Duty
+    </label>
+    <p style="font-size:12px;color:var(--text-tertiary);margin:6px 0 0;">
+      ${otherVacuum
+        ? `${escapeHtml(otherVacuum.employeeName)} is currently set for vacuum duty this same night — saving will move it to this shift instead.`
+        : `Marks this person as tonight's closing vacuum duty — shows a small badge on their shift. Only one person per night; turning this on automatically clears anyone else set for the same night.`}
+    </p>
     ${existingShift ? `<button id="se-delete" class="btn btn-danger btn-block" style="margin-top:18px;">${ICONS.trash} Delete Shift</button>` : ''}
   `, `
     <button class="btn btn-secondary" id="se-cancel">Cancel</button>
@@ -1764,6 +1786,7 @@ function attachShiftEditorHandlers() {
   $('se-minute')?.addEventListener('input', e => { f.minute = parseInt(e.target.value)||0; });
   $('se-notes')?.addEventListener('input', e => { f.notes = e.target.value; });
   $('se-published')?.addEventListener('change', e => { f.published = e.target.checked; });
+  $('se-vacuum')?.addEventListener('change', e => { f.vacuumDuty = e.target.checked; render(); });
   $('se-am')?.addEventListener('click', () => { f.isPM = false; render(); });
   $('se-pm')?.addEventListener('click', () => { f.isPM = true; render(); });
   $('se-delete')?.addEventListener('click', () => {
@@ -1799,7 +1822,14 @@ function attachShiftEditorHandlers() {
       employeeId: f.employeeId, employeeName: emp.name, role: f.role,
       date: new Date(date.getFullYear(), date.getMonth(), date.getDate()),
       startTime, notes: f.notes || '', published: !!f.published,
+      vacuumDuty: !!f.vacuumDuty,
     };
+    // Only one person per night can be on vacuum duty — clear it from
+    // whoever else had it that same night before saving this one.
+    if (payload.vacuumDuty) {
+      const other = otherVacuumShiftOnDate(payload.date, existingShift?.id);
+      if (other) await updateShift(other.id, { vacuumDuty: false });
+    }
     if (existingShift) await updateShift(existingShift.id, payload);
     else await addShift(payload);
     state.modals.shiftEditor = null;
@@ -1821,6 +1851,7 @@ function renderShiftDetailModal() {
       <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Date</span><span>${formatDateFull(sh.date)}</span></div>
       <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Start Time</span><span>${formatTime(sh.startTime)}</span></div>
       ${sh.notes ? `<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Notes</span><span>${escapeHtml(sh.notes)}</span></div>` : ''}
+      ${sh.vacuumDuty ? `<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Closing Duty</span><span style="display:flex;align-items:center;gap:5px;">${ICONS.vacuum} Vacuum</span></div>` : ''}
       <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Status</span><span class="badge" style="background:${sh.published?'var(--green)':'var(--bg-elevated-2)'}22;color:${sh.published?'var(--green)':'var(--text-secondary)'};">${sh.published?'Published':'Draft'}</span></div>
     </div>
   `, `<button class="btn btn-primary" id="sd-close2">Done</button>`, 'sd-close');
@@ -2108,6 +2139,10 @@ function renderColorLegendModal() {
           <span>${r}</span>
         </div>
       `).join('')}
+      <div style="display:flex;align-items:center;gap:12px;border-top:1px solid var(--border);padding-top:12px;margin-top:2px;">
+        <span style="width:16px;display:inline-flex;justify-content:center;color:var(--text-secondary);">${ICONS.vacuum}</span>
+        <span>Closing Vacuum Duty</span>
+      </div>
     </div>
   `, `<button class="btn btn-primary" id="cl-close2">Done</button>`, 'cl-close');
 }
@@ -2121,6 +2156,23 @@ function attachColorLegendHandlers() {
 function showConfirm(opts) {
   state.modals.confirm = opts;
   render();
+}
+// Single-button, info-only popup (no confirm/cancel choice) — e.g. the
+// "Request Time Off" disabled notice.
+function showAlert(title, message) {
+  state.modals.alert = { title, message };
+  render();
+}
+function renderAlertModal() {
+  const a = state.modals.alert;
+  return modalWrap(a.title, `<p style="margin:0;color:var(--text-secondary);font-size:14px;line-height:1.5;white-space:pre-line;">${escapeHtml(a.message||'')}</p>`, `
+    <button class="btn btn-primary" id="al-ok">Got it</button>
+  `, 'al-close');
+}
+function attachAlertHandlers() {
+  const close = () => { state.modals.alert = null; render(); };
+  document.getElementById('al-close')?.addEventListener('click', close);
+  document.getElementById('al-ok')?.addEventListener('click', close);
 }
 function renderConfirmModal() {
   const c = state.modals.confirm;
@@ -2156,6 +2208,7 @@ function attachModalHandlers() {
   if (state.modals.timeOffDetail) attachTimeOffDetailHandlers();
   if (state.modals.colorLegend) attachColorLegendHandlers();
   if (state.modals.confirm) attachConfirmHandlers();
+  if (state.modals.alert) attachAlertHandlers();
 }
 
 // ============================================================================
@@ -2222,7 +2275,7 @@ function exportSchedulePDF(weekDates, roleFilter) {
         doc.setDrawColor(r,g,b);
         doc.roundedRect(cellX+2, segY, dayColWidth-4, segH-1, 3, 3, 'S');
         doc.setTextColor(r,g,b); doc.setFont('helvetica','bold'); doc.setFontSize(8);
-        doc.text(formatTime(sh.startTime), cellX + dayColWidth/2, segY + segH/2 + 3, { align: 'center' });
+        doc.text(formatTime(sh.startTime) + (sh.vacuumDuty ? ' (V)' : ''), cellX + dayColWidth/2, segY + segH/2 + 3, { align: 'center' });
       });
     });
     // row separator
