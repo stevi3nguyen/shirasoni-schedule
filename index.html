@@ -175,7 +175,7 @@ const storage = firebase.storage();
 // ============================================================================
 const ALL_ROLES = ['Server','Sushi Server','Host','Sushi Chef','Teppanyaki Chef','Kitchen','Bartender','Dishwasher','Busser','Manager'];
 const SELECTABLE_ROLES = ALL_ROLES; // Manager is now a selectable role too — separate from the isManager access flag
-const SECTION_ORDER = ['Server','Host','Teppanyaki Chef','Sushi Chef','Kitchen','Bartender','Dishwasher','Manager'];
+const SECTION_ORDER = ['Server','Teppanyaki Chef','Sushi Chef','Kitchen','Bartender','Dishwasher','Manager'];
 const ROLE_COLORS = {
   'Server': '#3b82f6',
   'Sushi Server': '#06b6d4',
@@ -189,7 +189,7 @@ const ROLE_COLORS = {
   'Manager': '#6366f1',
 };
 function sectionRole(role) {
-  if (role === 'Sushi Server') return 'Server';
+  if (role === 'Sushi Server' || role === 'Host') return 'Server';
   if (role === 'Busser') return 'Dishwasher';
   return role;
 }
@@ -784,6 +784,7 @@ function renderApp() {
   else if (state.tab === 'approvals' && isManager) body = renderApprovalsTab();
   else if (state.tab === 'profile') body = renderProfileTab();
   else if (state.tab === 'manageStaff' && isManager) body = renderManageStaffTab();
+  else if (state.tab === 'viewStaff' && !isManager) body = renderViewStaffTab();
   else body = renderScheduleTab();
 
   const reqBadge = pendingResponseCount();
@@ -828,6 +829,7 @@ function attachAppHandlers() {
   attachApprovalsHandlers();
   attachProfileHandlers();
   attachManageStaffHandlers();
+  attachViewStaffHandlers();
   attachModalHandlers();
   attachEmployeePreviewHandlers();
 }
@@ -902,7 +904,7 @@ function renderRoleChips(activeRole, dataAttr) {
   return `
     <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:14px;-webkit-overflow-scrolling:touch;">
       <button class="chip ${!activeRole?'active':''}" data-${dataAttr}="">All</button>
-      ${SELECTABLE_ROLES.filter(r => r !== 'Sushi Server' && r !== 'Busser').map(r =>
+      ${SELECTABLE_ROLES.filter(r => r !== 'Sushi Server' && r !== 'Busser' && r !== 'Host').map(r =>
         `<button class="chip ${activeRole===r?'active':''}" data-${dataAttr}="${r}">${r}</button>`
       ).join('')}
     </div>
@@ -1558,11 +1560,9 @@ function renderProfileTab() {
       </div>
       <p style="color:var(--text-tertiary);font-size:12px;margin:0 0 20px;">Tap your name to edit it.</p>
 
-      ${isManager ? `
-        <button id="profile-manage-staff" class="card btn-block" style="display:flex;justify-content:space-between;align-items:center;padding:16px;background:var(--bg-elevated);border:1px solid var(--border);color:var(--text);text-align:left;margin-bottom:20px;font-size:15px;font-weight:600;">
-          <span style="display:flex;align-items:center;gap:10px;">${ICONS.user} Manage Staff</span>${ICONS.chevRight}
-        </button>
-      ` : ''}
+      <button id="${isManager ? 'profile-manage-staff' : 'profile-view-staff'}" class="card btn-block" style="display:flex;justify-content:space-between;align-items:center;padding:16px;background:var(--bg-elevated);border:1px solid var(--border);color:var(--text);text-align:left;margin-bottom:20px;font-size:15px;font-weight:600;">
+        <span style="display:flex;align-items:center;gap:10px;">${ICONS.user} ${isManager ? 'Manage Staff' : 'View Staff'}</span>${ICONS.chevRight}
+      </button>
 
       <button id="profile-signout" class="btn btn-danger btn-block">Sign Out</button>
     </div>
@@ -1575,6 +1575,7 @@ function attachProfileHandlers() {
   $('profile-edit-name')?.addEventListener('click', () => { state.modals.editName = true; state.modals.editNameValue = state.employee.name; render(); });
   $('profile-signout')?.addEventListener('click', signOut);
   $('profile-manage-staff')?.addEventListener('click', () => { state.tab = 'manageStaff'; render(); });
+  $('profile-view-staff')?.addEventListener('click', () => { state.tab = 'viewStaff'; render(); });
   $('profile-photo-input')?.addEventListener('change', (e) => {
     const file = e.target.files && e.target.files[0];
     if (file) uploadProfilePhoto(file);
@@ -1637,6 +1638,47 @@ function attachManageStaffHandlers() {
       onConfirm: () => deleteEmployee(el.dataset.msDelete),
     });
   }));
+}
+
+// ============================================================================
+// VIEW STAFF TAB (read-only roster for non-managers — same idea as Manage
+// Staff, but no add/edit/delete controls. Tapping someone opens the same
+// photo/name/role preview used elsewhere in the app.)
+// ============================================================================
+function renderViewStaffTab() {
+  const list = [...state.employees].sort((a,b) => a.name.localeCompare(b.name));
+  return `
+    <div class="topbar">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button id="vs-back" class="btn btn-ghost btn-sm">${ICONS.chevLeft}</button>
+        <h1 class="page-title" style="font-size:20px;">Staff</h1>
+      </div>
+    </div>
+    <div class="content">
+      <div class="card" style="overflow:hidden;">
+        ${list.map((e,i) => `
+          <button data-employee-preview="${e.id}" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:14px 16px;${i<list.length-1?'border-bottom:1px solid var(--border);':''}background:none;border:none;text-align:left;color:var(--text);cursor:pointer;">
+            <span style="display:flex;align-items:center;gap:12px;">
+              ${avatarHtml(e.name, e.photoURL, 36)}
+              <div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span style="font-weight:600;">${escapeHtml(e.name)}</span>
+                  ${e.isManager ? `<span class="badge" style="background:#6366f122;color:#6366f1;">Manager</span>` : ''}
+                </div>
+                <div style="color:var(--text-secondary);font-size:13px;">${e.role}</div>
+              </div>
+            </span>
+          </button>
+        `).join('') || `<div style="padding:30px;text-align:center;color:var(--text-tertiary);">No staff yet.</div>`}
+      </div>
+      <p style="color:var(--text-tertiary);font-size:12px;margin-top:10px;">Tap anyone to see their profile.</p>
+    </div>
+  `;
+}
+function attachViewStaffHandlers() {
+  if (state.tab !== 'viewStaff') return;
+  const $ = id => document.getElementById(id);
+  $('vs-back')?.addEventListener('click', () => { state.tab = 'profile'; render(); });
 }
 
 // ============================================================================
