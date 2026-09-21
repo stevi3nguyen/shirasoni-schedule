@@ -173,7 +173,7 @@ const storage = firebase.storage();
 // ============================================================================
 // ROLE CONFIG — mirrors EmployeeRole in the iOS app exactly.
 // ============================================================================
-const ALL_ROLES = ['Server','Sushi Server','Host','Sushi Chef','Teppanyaki Chef','Kitchen','Bartender','Dishwasher','Busser','Manager'];
+const ALL_ROLES = ['Server','Sushi Server','Host','Sushi Chef','Teppanyaki Chef','Kitchen','Bartender','Dishwasher','Busser','Bar Back','Manager'];
 const SELECTABLE_ROLES = ALL_ROLES; // Manager is now a selectable role too — separate from the isManager access flag
 const SECTION_ORDER = ['Server','Teppanyaki Chef','Sushi Chef','Kitchen','Bartender','Dishwasher'];
 const ROLE_COLORS = {
@@ -186,11 +186,12 @@ const ROLE_COLORS = {
   'Bartender': '#22c55e',
   'Dishwasher': '#8b8b8b',
   'Busser': '#8c7a5e',
+  'Bar Back': '#4a8789',
   'Manager': '#6366f1',
 };
 function sectionRole(role) {
   if (role === 'Sushi Server' || role === 'Host' || role === 'Manager') return 'Server';
-  if (role === 'Busser') return 'Dishwasher';
+  if (role === 'Busser' || role === 'Bar Back') return 'Dishwasher';
   return role;
 }
 // Secondary sort key used only to order people WITHIN a merged section —
@@ -219,9 +220,22 @@ function avatarColorFor(name) {
   const hue = hash % 360;
   return `hsl(${hue}, 45%, 45%)`;
 }
-function avatarHtml(name, photoURL, size) {
+// A manually-added staff member (a manager just typed their name into
+// Manage Staff, with no real login of their own) is tagged with an authUID
+// starting with "manual-" — see addEmployee(). Avatars (photo or colored
+// initials) are reserved for people who actually made a real account, so a
+// manually-added entry always gets a plain blank placeholder instead.
+function isManualEmployee(authUID) {
+  return !!(authUID && authUID.startsWith('manual-'));
+}
+function avatarHtml(name, photoURL, size, authUID) {
   size = size || 36;
   const fontSize = Math.round(size * 0.4);
+  if (isManualEmployee(authUID)) {
+    const iconSize = Math.round(size * 0.55);
+    return `<div class="avatar" style="width:${size}px;height:${size}px;background:#d9d9dd;display:flex;align-items:center;justify-content:center;">` +
+      `<svg width="${iconSize}" height="${iconSize}" viewBox="0 0 24 24" fill="none" stroke="#9a9aa2" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg></div>`;
+  }
   if (photoURL) {
     return `<div class="avatar" style="width:${size}px;height:${size}px;background-image:url('${escapeHtml(photoURL)}');"></div>`;
   }
@@ -506,7 +520,7 @@ async function copyPreviousWeek(currentWeekStart) {
     await addShift({
       employeeId: s.employeeId, employeeName: s.employeeName, role: s.role,
       date: newDate, startTime: newStart, notes: s.notes || '', published: false,
-      vacuumDuty: !!s.vacuumDuty,
+      vacuumDuty: !!s.vacuumDuty, ventCleaning: !!s.ventCleaning,
     });
   }
   return prevShifts.length;
@@ -914,7 +928,7 @@ function renderRoleChips(activeRole, dataAttr) {
   return `
     <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:14px;-webkit-overflow-scrolling:touch;">
       <button class="chip ${!activeRole?'active':''}" data-${dataAttr}="">All</button>
-      ${SELECTABLE_ROLES.filter(r => r !== 'Sushi Server' && r !== 'Busser' && r !== 'Host' && r !== 'Manager').map(r =>
+      ${SELECTABLE_ROLES.filter(r => r !== 'Sushi Server' && r !== 'Busser' && r !== 'Bar Back' && r !== 'Host' && r !== 'Manager').map(r =>
         `<button class="chip ${activeRole===r?'active':''}" data-${dataAttr}="${r}">${r}</button>`
       ).join('')}
     </div>
@@ -954,7 +968,7 @@ function renderScheduleGrid(weekDates, roleFilter, managerMode, onCellAction) {
     let inner = dayShifts.map(sh => {
       const color = roleColor(sh.role);
       const opacity = sh.published ? '2a' : '14';
-      return `<div class="shift-chip" style="background:${color}${opacity};color:${color};border-color:${color}55;" data-shift-chip="${sh.id}">${formatTime(sh.startTime)}${sh.vacuumDuty ? ` <span style="font-size:13px;">🧹</span>` : ''}</div>`;
+      return `<div class="shift-chip" style="background:${color}${opacity};color:${color};border-color:${color}55;" data-shift-chip="${sh.id}">${formatTime(sh.startTime)}${sh.vacuumDuty ? ` <span style="font-size:13px;">🧹</span>` : ''}${sh.ventCleaning ? ` <span style="font-size:13px;">💨</span>` : ''}</div>`;
     }).join('<div style="height:2px"></div>');
     if (managerMode && dayShifts.length < MAX_SHIFTS_PER_DAY) {
       if (inner) inner += '<div style="height:2px"></div>';
@@ -968,7 +982,7 @@ function renderScheduleGrid(weekDates, roleFilter, managerMode, onCellAction) {
     return `<tr${isMe ? ' style="background:var(--accent-dim);"' : ''}>
       <td class="name-cell">
         <button data-employee-preview="${emp.id}" style="background:none;border:none;color:${isMe?'var(--accent)':'inherit'};font:inherit;font-weight:${isMe?'700':'inherit'};cursor:pointer;display:flex;align-items:center;gap:6px;padding:0;">
-          ${avatarHtml(emp.name, emp.photoURL, 20)}
+          ${avatarHtml(emp.name, emp.photoURL, 20, emp.authUID)}
           <span>${escapeHtml(emp.name)}</span>
         </button>
       </td>
@@ -1040,7 +1054,7 @@ function renderShiftRow(sh, divider) {
   return `
     <div data-shift-row="${sh.id}" style="display:flex;align-items:center;gap:12px;padding:14px 16px;${divider?'border-bottom:1px solid var(--border);':''}cursor:pointer;${mine?'background:rgba(232,73,29,0.06);':''}">
       <div style="width:4px;align-self:stretch;background:${color};border-radius:2px;"></div>
-      ${avatarHtml(sh.employeeName, emp?.photoURL, 32)}
+      ${avatarHtml(sh.employeeName, emp?.photoURL, 32, emp?.authUID)}
       <div style="flex:1;min-width:0;">
         <div style="font-weight:${mine?'700':'500'};">${escapeHtml(sh.employeeName)}</div>
         <div style="color:var(--text-secondary);font-size:13px;">${formatTime(sh.startTime)}</div>
@@ -1187,7 +1201,7 @@ function attachBuildHandlers() {
 
   $('menu-add-shift')?.addEventListener('click', () => {
     state.modals.shiftEditor = { date: b.selectedDate || getWeekDates(b.anchorDate)[0], existingShift: null };
-    state.modals.shiftEditorForm = { vacuumDuty: false };
+    state.modals.shiftEditorForm = { vacuumDuty: false, ventCleaning: false };
     render();
   });
   $('menu-copy-week')?.addEventListener('click', async () => {
@@ -1265,14 +1279,14 @@ function openShiftEditor(date, existingShift, presetEmployee) {
       minute: existingShift.startTime.getMinutes(),
       isPM: existingShift.startTime.getHours() >= 12,
       notes: existingShift.notes || '', published: existingShift.published,
-      vacuumDuty: !!existingShift.vacuumDuty,
+      vacuumDuty: !!existingShift.vacuumDuty, ventCleaning: !!existingShift.ventCleaning,
     };
   } else {
     state.modals.shiftEditorForm = {
       employeeId: presetEmployee ? presetEmployee.id : '',
       role: presetEmployee ? presetEmployee.role : SELECTABLE_ROLES[0],
       hour: 4, minute: 0, isPM: true, notes: '', published: false,
-      vacuumDuty: false,
+      vacuumDuty: false, ventCleaning: false,
     };
   }
   render();
@@ -1432,7 +1446,7 @@ function renderApprovalsTab() {
 function renderStaffApprovalRow(e, divider) {
   return `
     <div style="display:flex;align-items:center;gap:12px;padding:14px 16px;${divider?'border-bottom:1px solid var(--border);':''}">
-      ${avatarHtml(e.name, e.photoURL, 36)}
+      ${avatarHtml(e.name, e.photoURL, 36, e.authUID)}
       <div style="flex:1;">
         <div style="font-weight:600;font-size:14px;">${escapeHtml(e.name)}</div>
         <div style="color:var(--text-secondary);font-size:13px;">${e.role}</div>
@@ -1556,7 +1570,7 @@ function renderProfileTab() {
     <div class="content">
       <div style="display:flex;flex-direction:column;align-items:center;gap:8px;margin-bottom:20px;">
         <label for="profile-photo-input" style="position:relative;cursor:${uploading?'default':'pointer'};">
-          ${avatarHtml(e.name, e.photoURL, 88)}
+          ${avatarHtml(e.name, e.photoURL, 88, e.authUID)}
           ${uploading ? `
             <div style="position:absolute;inset:0;border-radius:50%;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;color:white;font-size:11px;">…</div>
           ` : `
@@ -1618,7 +1632,7 @@ function renderManageStaffTab() {
         ${list.map((e,i) => `
           <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;${i<list.length-1?'border-bottom:1px solid var(--border);':''}">
             <button data-ms-edit="${e.id}" style="background:none;border:none;text-align:left;color:var(--text);cursor:pointer;flex:1;display:flex;align-items:center;gap:12px;">
-              ${avatarHtml(e.name, e.photoURL, 36)}
+              ${avatarHtml(e.name, e.photoURL, 36, e.authUID)}
               <div>
                 <div style="display:flex;align-items:center;gap:8px;">
                   <span style="font-weight:600;">${escapeHtml(e.name)}</span>
@@ -1677,7 +1691,7 @@ function renderViewStaffTab() {
         ${list.map((e,i) => `
           <button data-employee-preview="${e.id}" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:14px 16px;${i<list.length-1?'border-bottom:1px solid var(--border);':''}background:none;border:none;text-align:left;color:var(--text);cursor:pointer;">
             <span style="display:flex;align-items:center;gap:12px;">
-              ${avatarHtml(e.name, e.photoURL, 36)}
+              ${avatarHtml(e.name, e.photoURL, 36, e.authUID)}
               <div>
                 <div style="display:flex;align-items:center;gap:8px;">
                   <span style="font-weight:600;">${escapeHtml(e.name)}</span>
@@ -1741,8 +1755,15 @@ function renderModals() {
 function otherVacuumShiftOnDate(date, excludingShiftId) {
   return state.shifts.find(s => s.vacuumDuty && isSameDay(s.date, date) && s.id !== excludingShiftId) || null;
 }
-// Vacuum duty only makes sense for whoever's closing the kitchen.
+// Same idea, tracked independently, for the vent cleaning closing duty.
+function otherVentShiftOnDate(date, excludingShiftId) {
+  return state.shifts.find(s => s.ventCleaning && isSameDay(s.date, date) && s.id !== excludingShiftId) || null;
+}
+// Vacuum duty and vent cleaning only make sense for whoever's closing the kitchen.
 function vacuumDutyEligible(role) {
+  return role === 'Kitchen' || role === 'Teppanyaki Chef';
+}
+function ventCleaningEligible(role) {
   return role === 'Kitchen' || role === 'Teppanyaki Chef';
 }
 function renderShiftEditorModal() {
@@ -1751,6 +1772,8 @@ function renderShiftEditorModal() {
   const activeEmployees = state.employees.filter(e => e.active);
   const vacuumEligible = vacuumDutyEligible(f.role);
   const otherVacuum = (vacuumEligible && f.vacuumDuty) ? otherVacuumShiftOnDate(date, existingShift?.id) : null;
+  const ventEligible = ventCleaningEligible(f.role);
+  const otherVent = (ventEligible && f.ventCleaning) ? otherVentShiftOnDate(date, existingShift?.id) : null;
   return modalWrap(existingShift ? 'Edit Shift' : 'Add Shift', `
     <label class="label">Employee</label>
     <select class="input" id="se-employee" style="margin-bottom:14px;">
@@ -1787,6 +1810,16 @@ function renderShiftEditorModal() {
           : `Marks this person as tonight's closing vacuum duty — shows a small badge on their shift. Only one person per night; turning this on automatically clears anyone else set for the same night.`}
       </p>
     ` : ''}
+    ${ventEligible ? `
+      <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;margin-top:14px;">
+        <input type="checkbox" id="se-vent" ${f.ventCleaning?'checked':''}> Closing Vent Cleaning
+      </label>
+      <p style="font-size:12px;color:var(--text-tertiary);margin:6px 0 0;">
+        ${otherVent
+          ? `${escapeHtml(otherVent.employeeName)} is currently set for vent cleaning this same night — saving will move it to this shift instead.`
+          : `Marks this person as tonight's closing vent cleaning — shows a small badge on their shift. Only one person per night; turning this on automatically clears anyone else set for the same night.`}
+      </p>
+    ` : ''}
     ${existingShift ? `<button id="se-delete" class="btn btn-danger btn-block" style="margin-top:18px;">${ICONS.trash} Delete Shift</button>` : ''}
   `, `
     <button class="btn btn-secondary" id="se-cancel">Cancel</button>
@@ -1803,6 +1836,7 @@ function attachShiftEditorHandlers() {
   $('se-role')?.addEventListener('change', e => {
     f.role = e.target.value;
     if (!vacuumDutyEligible(f.role)) f.vacuumDuty = false;
+    if (!ventCleaningEligible(f.role)) f.ventCleaning = false;
     render();
   });
   $('se-hour')?.addEventListener('input', e => { f.hour = parseInt(e.target.value)||1; });
@@ -1810,6 +1844,7 @@ function attachShiftEditorHandlers() {
   $('se-notes')?.addEventListener('input', e => { f.notes = e.target.value; });
   $('se-published')?.addEventListener('change', e => { f.published = e.target.checked; });
   $('se-vacuum')?.addEventListener('change', e => { f.vacuumDuty = e.target.checked; render(); });
+  $('se-vent')?.addEventListener('change', e => { f.ventCleaning = e.target.checked; render(); });
   $('se-am')?.addEventListener('click', () => { f.isPM = false; render(); });
   $('se-pm')?.addEventListener('click', () => { f.isPM = true; render(); });
   $('se-delete')?.addEventListener('click', () => {
@@ -1846,12 +1881,18 @@ function attachShiftEditorHandlers() {
       date: new Date(date.getFullYear(), date.getMonth(), date.getDate()),
       startTime, notes: f.notes || '', published: !!f.published,
       vacuumDuty: vacuumDutyEligible(f.role) && !!f.vacuumDuty,
+      ventCleaning: ventCleaningEligible(f.role) && !!f.ventCleaning,
     };
     // Only one person per night can be on vacuum duty — clear it from
     // whoever else had it that same night before saving this one.
     if (payload.vacuumDuty) {
       const other = otherVacuumShiftOnDate(payload.date, existingShift?.id);
       if (other) await updateShift(other.id, { vacuumDuty: false });
+    }
+    // Same one-person-per-night rule for vent cleaning, tracked independently.
+    if (payload.ventCleaning) {
+      const other = otherVentShiftOnDate(payload.date, existingShift?.id);
+      if (other) await updateShift(other.id, { ventCleaning: false });
     }
     if (existingShift) await updateShift(existingShift.id, payload);
     else await addShift(payload);
@@ -1866,7 +1907,7 @@ function renderShiftDetailModal() {
   const emp = state.employees.find(e => e.id === sh.employeeId);
   return modalWrap('Shift Details', `
     <div style="display:flex;justify-content:center;margin-bottom:14px;">
-      ${avatarHtml(sh.employeeName, emp?.photoURL, 64)}
+      ${avatarHtml(sh.employeeName, emp?.photoURL, 64, emp?.authUID)}
     </div>
     <div style="display:flex;flex-direction:column;gap:10px;font-size:14px;">
       <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Employee</span><span>${escapeHtml(sh.employeeName)}</span></div>
@@ -1875,6 +1916,7 @@ function renderShiftDetailModal() {
       <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Start Time</span><span>${formatTime(sh.startTime)}</span></div>
       ${sh.notes ? `<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Notes</span><span>${escapeHtml(sh.notes)}</span></div>` : ''}
       ${sh.vacuumDuty ? `<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Closing Duty</span><span style="display:flex;align-items:center;gap:6px;"><span style="font-size:16px;">🧹</span> Vacuum</span></div>` : ''}
+      ${sh.ventCleaning ? `<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Closing Duty</span><span style="display:flex;align-items:center;gap:6px;"><span style="font-size:16px;">💨</span> Vent Cleaning</span></div>` : ''}
       <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-secondary);">Status</span><span class="badge" style="background:${sh.published?'var(--green)':'var(--bg-elevated-2)'}22;color:${sh.published?'var(--green)':'var(--text-secondary)'};">${sh.published?'Published':'Draft'}</span></div>
     </div>
   `, `<button class="btn btn-primary" id="sd-close2">Done</button>`, 'sd-close');
@@ -1890,7 +1932,7 @@ function renderEmployeePreviewModal() {
   const emp = state.modals.employeePreview;
   return modalWrap('Profile', `
     <div style="display:flex;flex-direction:column;align-items:center;gap:10px;padding:10px 0;">
-      ${avatarHtml(emp.name, emp.photoURL, 100)}
+      ${avatarHtml(emp.name, emp.photoURL, 100, emp.authUID)}
       <div style="font-size:18px;font-weight:700;">${escapeHtml(emp.name)}</div>
       <div style="display:flex;align-items:center;gap:8px;">
         <span style="color:var(--text-secondary);font-size:14px;">${emp.role}</span>
@@ -2166,6 +2208,10 @@ function renderColorLegendModal() {
         <span style="width:16px;display:inline-flex;justify-content:center;font-size:16px;">🧹</span>
         <span>Closing Vacuum Duty</span>
       </div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span style="width:16px;display:inline-flex;justify-content:center;font-size:16px;">💨</span>
+        <span>Closing Vent Cleaning</span>
+      </div>
     </div>
   `, `<button class="btn btn-primary" id="cl-close2">Done</button>`, 'cl-close');
 }
@@ -2298,7 +2344,7 @@ function exportSchedulePDF(weekDates, roleFilter) {
         doc.setDrawColor(r,g,b);
         doc.roundedRect(cellX+2, segY, dayColWidth-4, segH-1, 3, 3, 'S');
         doc.setTextColor(r,g,b); doc.setFont('helvetica','bold'); doc.setFontSize(8);
-        doc.text(formatTime(sh.startTime) + (sh.vacuumDuty ? ' (V)' : ''), cellX + dayColWidth/2, segY + segH/2 + 3, { align: 'center' });
+        doc.text(formatTime(sh.startTime) + (sh.vacuumDuty ? ' (V)' : '') + (sh.ventCleaning ? ' (VC)' : ''), cellX + dayColWidth/2, segY + segH/2 + 3, { align: 'center' });
       });
     });
     // row separator
