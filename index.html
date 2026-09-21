@@ -185,7 +185,7 @@ const ROLE_COLORS = {
   'Kitchen': '#92400e',
   'Bartender': '#22c55e',
   'Dishwasher': '#8b8b8b',
-  'Busser': '#8c7a5e',
+  'Busser': '#b8870a',
   'Bar Back': '#4a8789',
   'Manager': '#6366f1',
 };
@@ -2374,6 +2374,19 @@ function exportSchedulePDF(weekDates, roleFilter) {
     legendX += 14 + doc.getTextWidth(r) + 18;
   });
   doc.setTextColor(0);
+
+  // Explains the "(V)" / "(VC)" suffixes printed on shift cells — only shown
+  // when at least one shift in this export actually uses one.
+  const usesVacuum = relevant.some(s => s.vacuumDuty);
+  const usesVent = relevant.some(s => s.ventCleaning);
+  if (usesVacuum || usesVent) {
+    const noteParts = [];
+    if (usesVacuum) noteParts.push('(V) = Vacuum Duty');
+    if (usesVent) noteParts.push('(VC) = Vent Cleaning');
+    doc.setTextColor(90);
+    doc.text(noteParts.join('   '), margin, legendY + 16);
+    doc.setTextColor(0);
+  }
 
   doc.save(`Shirasoni-Schedule-${(roleFilter||'All-Staff').replace(/\//g,'-')}-${weekDates[0].toISOString().slice(0,10)}.pdf`);
 }
