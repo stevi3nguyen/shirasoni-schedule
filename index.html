@@ -175,7 +175,7 @@ const storage = firebase.storage();
 // ============================================================================
 const ALL_ROLES = ['Server','Sushi Server','Host','Sushi Chef','Teppanyaki Chef','Kitchen','Bartender','Dishwasher','Busser','Bar Back','Manager'];
 const SELECTABLE_ROLES = ALL_ROLES; // Manager is now a selectable role too — separate from the isManager access flag
-const SECTION_ORDER = ['Server','Teppanyaki Chef','Sushi Chef','Kitchen','Bartender','Dishwasher'];
+const SECTION_ORDER = ['Server','Sushi Chef','Kitchen','Bartender','Dishwasher'];
 const ROLE_COLORS = {
   'Server': '#3b82f6',
   'Sushi Server': '#06b6d4',
@@ -192,14 +192,18 @@ const ROLE_COLORS = {
 function sectionRole(role) {
   if (role === 'Sushi Server' || role === 'Host' || role === 'Manager') return 'Server';
   if (role === 'Busser' || role === 'Bar Back') return 'Dishwasher';
+  if (role === 'Teppanyaki Chef') return 'Kitchen';
   return role;
 }
 // Secondary sort key used only to order people WITHIN a merged section —
 // e.g. inside Server: plain Servers/Sushi Servers first, then Hosts, then
-// Managers. Purely cosmetic; doesn't affect which section they're grouped in.
+// Managers; inside Kitchen: Teppanyaki Chefs first, then plain Kitchen
+// staff. Purely cosmetic; doesn't affect which section they're grouped in.
 function sectionSubOrder(role) {
   if (role === 'Host') return 1;
   if (role === 'Manager') return 2;
+  if (role === 'Teppanyaki Chef') return 0;
+  if (role === 'Kitchen') return 1;
   return 0;
 }
 function roleColor(role) { return ROLE_COLORS[role] || '#8b8b8b'; }
