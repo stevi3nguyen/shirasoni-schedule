@@ -928,12 +928,19 @@ function renderWeekNav(weekDates, prevId, nextId) {
     </div>
   `;
 }
+// Kitchen's filter chip (and everywhere else its name shows up — the
+// publish banner, PDF export label/title/filename) now stands in for both
+// Kitchen and Teppanyaki Chef (they're merged into one section — see
+// sectionRole()), so the label needs to say that instead of just "Kitchen".
+function filterChipTitle(role) {
+  return role === 'Kitchen' ? 'Teppan/Kitchen' : role;
+}
 function renderRoleChips(activeRole, dataAttr) {
   return `
     <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:14px;-webkit-overflow-scrolling:touch;">
       <button class="chip ${!activeRole?'active':''}" data-${dataAttr}="">All</button>
-      ${SELECTABLE_ROLES.filter(r => r !== 'Sushi Server' && r !== 'Busser' && r !== 'Bar Back' && r !== 'Host' && r !== 'Manager').map(r =>
-        `<button class="chip ${activeRole===r?'active':''}" data-${dataAttr}="${r}">${r}</button>`
+      ${SELECTABLE_ROLES.filter(r => r !== 'Sushi Server' && r !== 'Busser' && r !== 'Bar Back' && r !== 'Host' && r !== 'Manager' && r !== 'Teppanyaki Chef').map(r =>
+        `<button class="chip ${activeRole===r?'active':''}" data-${dataAttr}="${r}">${filterChipTitle(r)}</button>`
       ).join('')}
     </div>
   `;
@@ -956,7 +963,11 @@ function employeeRowEmployees(weekDates, roleFilter, managerMode) {
     const ids = new Set(relevant.map(s => s.employeeId));
     list = state.employees.filter(e => ids.has(e.id));
   }
-  return { employees: list.sort((a,b) => a.name.localeCompare(b.name)), relevantShifts: relevant };
+  // Same clustering as the "All" grouped view (e.g. Teppanyaki Chefs before
+  // plain Kitchen staff) applies here too, so a filtered or restricted list
+  // isn't just flat alphabetical.
+  list.sort((a,b) => sectionSubOrder(a.role) - sectionSubOrder(b.role) || a.name.localeCompare(b.name));
+  return { employees: list, relevantShifts: relevant };
 }
 
 function shiftsFor(relevantShifts, employeeId, date) {
@@ -1007,7 +1018,7 @@ function renderScheduleGrid(weekDates, roleFilter, managerMode, onCellAction) {
       list.sort((a,b) => sectionSubOrder(a.role) - sectionSubOrder(b.role) || a.name.localeCompare(b.name));
     });
     bodyRows = SECTION_ORDER.filter(sec => grouped[sec]?.length).map(sec => `
-      <tr class="section-row"><td colspan="8">${sec}</td></tr>
+      <tr class="section-row"><td colspan="8">${filterChipTitle(sec)}</td></tr>
       ${grouped[sec].map(rowHtml).join('')}
     `).join('');
   } else {
@@ -1119,7 +1130,7 @@ function renderBuildTab() {
           <button class="btn-block" style="display:flex;align-items:center;gap:8px;padding:12px 16px;background:none;border:none;color:var(--text);text-align:left;font-size:14px;" id="menu-add-shift">${ICONS.plus} Add Shift</button>
           <button class="btn-block" style="display:flex;align-items:center;gap:8px;padding:12px 16px;background:none;border:none;color:var(--text);text-align:left;font-size:14px;border-top:1px solid var(--border);" id="menu-copy-week">Copy Last Week</button>
           ${totalDraftCount() > 0 ? `<button class="btn-block" style="display:flex;align-items:center;gap:8px;padding:12px 16px;background:none;border:none;color:var(--text);text-align:left;font-size:14px;border-top:1px solid var(--border);" id="menu-publish-all">Publish All Weeks (${totalDraftCount()})</button>` : ''}
-          <button class="btn-block" style="display:flex;align-items:center;gap:8px;padding:12px 16px;background:none;border:none;color:var(--text);text-align:left;font-size:14px;border-top:1px solid var(--border);" id="menu-export-pdf">Export PDF (${b.roleFilter || 'All Staff'})</button>
+          <button class="btn-block" style="display:flex;align-items:center;gap:8px;padding:12px 16px;background:none;border:none;color:var(--text);text-align:left;font-size:14px;border-top:1px solid var(--border);" id="menu-export-pdf">Export PDF (${b.roleFilter ? filterChipTitle(b.roleFilter) : 'All Staff'})</button>
           <button class="btn-block" style="display:flex;align-items:center;gap:8px;padding:12px 16px;background:none;border:none;color:var(--red);text-align:left;font-size:14px;border-top:1px solid var(--border);" id="menu-clear-week">${ICONS.trash} Clear This Week's Shifts</button>
         </div>
       </div>
@@ -1129,7 +1140,7 @@ function renderBuildTab() {
       ${renderRoleChips(b.roleFilter, 'build-role-chip')}
       ${draftCount > 0 ? `
         <button class="btn btn-primary btn-block" id="build-publish-btn" style="margin-bottom:16px;">
-          Publish ${draftCount} Draft ${b.roleFilter ? b.roleFilter + ' ' : ''}Shift${draftCount===1?'':'s'} This Week
+          Publish ${draftCount} Draft ${b.roleFilter ? filterChipTitle(b.roleFilter) + ' ' : ''}Shift${draftCount===1?'':'s'} This Week
         </button>
       ` : ''}
       ${b.copyMsg ? `<p style="color:var(--text-secondary);font-size:13px;margin:-6px 0 16px;">${escapeHtml(b.copyMsg)}</p>` : ''}
@@ -1166,7 +1177,7 @@ function renderBuildList(weekDates, b) {
     </div>
     <div class="card">
       ${SECTION_ORDER.filter(sec => grouped[sec]?.length).map(sec => `
-        <div style="padding:10px 16px;background:var(--bg-elevated-2);font-size:11px;font-weight:700;letter-spacing:0.04em;color:var(--text-secondary);text-transform:uppercase;">${sec}</div>
+        <div style="padding:10px 16px;background:var(--bg-elevated-2);font-size:11px;font-weight:700;letter-spacing:0.04em;color:var(--text-secondary);text-transform:uppercase;">${filterChipTitle(sec)}</div>
         ${grouped[sec].map((sh,i) => `
           <div data-build-shift-row="${sh.id}" style="display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border);cursor:pointer;">
             <div style="width:4px;align-self:stretch;background:${roleColor(sh.role)};border-radius:2px;"></div>
@@ -1246,7 +1257,7 @@ function attachBuildHandlers() {
     const count = draftCountForWeek(weekDates, b.roleFilter);
     showConfirm({
       title: "Publish This Week's Schedule?",
-      message: `This makes ${count} draft ${b.roleFilter ? b.roleFilter + ' ' : ''}shift(s) for ${weekRangeLabel(weekDates)} visible to staff. Other ${b.roleFilter ? 'roles and other ' : ''}weeks won't be affected.`,
+      message: `This makes ${count} draft ${b.roleFilter ? filterChipTitle(b.roleFilter) + ' ' : ''}shift(s) for ${weekRangeLabel(weekDates)} visible to staff. Other ${b.roleFilter ? 'roles and other ' : ''}weeks won't be affected.`,
       confirmLabel: 'Publish',
       onConfirm: async () => { await publishDraftShifts(weekDates, b.roleFilter); render(); }
     });
@@ -1515,7 +1526,7 @@ function renderTimeOffCalendar() {
           <thead><tr><th class="name-header"></th>${weekDates.map(d=>`<th>${weekdayAbbr(d)}<br><span style="color:var(--text-tertiary);font-weight:500;">${d.getDate()}</span></th>`).join('')}</tr></thead>
           <tbody>
             ${SECTION_ORDER.filter(sec=>grouped[sec]?.length).map(sec => `
-              <tr class="section-row"><td colspan="8">${sec}</td></tr>
+              <tr class="section-row"><td colspan="8">${filterChipTitle(sec)}</td></tr>
               ${grouped[sec].map(e => `<tr><td class="name-cell">${escapeHtml(e.name)}</td>${weekDates.map(d=>cellFor(e,d)).join('')}</tr>`).join('')}
             `).join('')}
           </tbody>
@@ -2286,7 +2297,7 @@ function exportSchedulePDF(weekDates, roleFilter) {
   let y = margin;
 
   doc.setFont('helvetica', 'bold'); doc.setFontSize(18);
-  doc.text(`Shirasoni — ${roleFilter || 'All Staff'} Schedule`, margin, y + 14);
+  doc.text(`Shirasoni — ${roleFilter ? filterChipTitle(roleFilter) : 'All Staff'} Schedule`, margin, y + 14);
   doc.setFont('helvetica', 'normal'); doc.setFontSize(11); doc.setTextColor(120);
   doc.text(weekRangeLabel(weekDates), margin, y + 32);
   doc.setTextColor(0);
@@ -2382,7 +2393,7 @@ function exportSchedulePDF(weekDates, roleFilter) {
     doc.setTextColor(0);
   }
 
-  doc.save(`Shirasoni-Schedule-${(roleFilter||'All-Staff').replace(/\//g,'-')}-${weekDates[0].toISOString().slice(0,10)}.pdf`);
+  doc.save(`Shirasoni-Schedule-${(roleFilter?filterChipTitle(roleFilter):'All-Staff').replace(/\//g,'-')}-${weekDates[0].toISOString().slice(0,10)}.pdf`);
 }
 function hexToRgb(hex) {
   const v = hex.replace('#','');
