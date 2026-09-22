@@ -175,7 +175,7 @@ const storage = firebase.storage();
 // ============================================================================
 const ALL_ROLES = ['Server','Sushi Server','Host','Sushi Chef','Teppanyaki Chef','Kitchen','Bartender','Dishwasher','Busser','Bar Back','Manager'];
 const SELECTABLE_ROLES = ALL_ROLES; // Manager is now a selectable role too — separate from the isManager access flag
-const SECTION_ORDER = ['Server','Sushi Chef','Kitchen','Bartender','Dishwasher'];
+const SECTION_ORDER = ['Server','Kitchen','Sushi Chef','Bartender','Dishwasher'];
 const ROLE_COLORS = {
   'Server': '#3b82f6',
   'Sushi Server': '#06b6d4',
@@ -2307,11 +2307,43 @@ function exportSchedulePDF(weekDates, roleFilter) {
   const tableWidth = pageWidth - margin*2;
   const dayColWidth = (tableWidth - nameColWidth) / 7;
   const rowHeight = 26;
+  const sectionHeaderHeight = 20;
 
   const matchingIds = roleFilter ? new Set(state.employees.filter(e => employeeMatchesRoleFilter(e, roleFilter)).map(e=>e.id)) : null;
   const relevant = state.shifts.filter(s => s.published && weekDates.some(d=>isSameDay(d,s.date)) && (!matchingIds || matchingIds.has(s.employeeId)));
   const empIds = new Set(relevant.map(s=>s.employeeId));
-  const rowEmployees = state.employees.filter(e => empIds.has(e.id)).sort((a,b)=>a.name.localeCompare(b.name));
+  const rowEmployeesFlat = state.employees.filter(e => empIds.has(e.id));
+
+  function sortedWithinSection(list) {
+    return [...list].sort((a,b) => sectionSubOrder(a.role) - sectionSubOrder(b.role) || a.name.localeCompare(b.name));
+  }
+
+  // Grouped section list — mirrors the on-screen "All" grid and the iOS PDF
+  // export: each entry is { role, employees }, role is null (no header
+  // drawn) when a specific section is already being filtered to, since
+  // there's nothing left to label. Within a merged section (e.g.
+  // Teppan/Kitchen), sectionSubOrder keeps Teppanyaki Chefs listed first
+  // and plain Kitchen staff at the bottom.
+  let sectionsToRender;
+  if (!roleFilter) {
+    const grouped = {};
+    rowEmployeesFlat.forEach(e => {
+      const sec = sectionRole(e.role);
+      (grouped[sec] = grouped[sec] || []).push(e);
+    });
+    const seen = new Set();
+    sectionsToRender = [];
+    SECTION_ORDER.forEach(sec => {
+      seen.add(sec);
+      if (grouped[sec] && grouped[sec].length) sectionsToRender.push({ role: sec, employees: sortedWithinSection(grouped[sec]) });
+    });
+    Object.keys(grouped).forEach(sec => {
+      if (!seen.has(sec) && grouped[sec].length) sectionsToRender.push({ role: sec, employees: sortedWithinSection(grouped[sec]) });
+    });
+  } else {
+    sectionsToRender = [{ role: null, employees: sortedWithinSection(rowEmployeesFlat) }];
+  }
+  const totalEmployeeCount = sectionsToRender.reduce((sum, s) => sum + s.employees.length, 0);
 
   // Header row
   doc.setFillColor(238,238,238); doc.rect(margin, y, tableWidth, 20, 'F');
@@ -2320,53 +2352,86 @@ function exportSchedulePDF(weekDates, roleFilter) {
     doc.text(`${weekdayAbbr(d)} ${d.getMonth()+1}/${d.getDate()}`, margin + nameColWidth + i*dayColWidth + 6, y + 13);
   });
   y += 20;
-  doc.setDrawColor(200);
-  doc.rect(margin, y, tableWidth, Math.max(rowEmployees.length,1)*rowHeight);
 
-  if (!rowEmployees.length) {
+  if (!totalEmployeeCount) {
+    doc.setDrawColor(200);
+    doc.rect(margin, y, tableWidth, rowHeight);
     doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(150);
     doc.text('No published shifts for this selection.', margin+6, y+16);
     doc.setTextColor(0);
-  }
+    y += rowHeight;
+  } else {
+    let pageStartY = y;
+    let pageRowCount = 0;
 
-  rowEmployees.forEach((emp, ri) => {
-    if (y > pageHeight - margin - rowHeight - 60) {
-      doc.addPage(); y = margin;
+    // Draws the bordered table box + grid lines for one contiguous run of
+    // rows on the current page (a section header is NOT part of the box —
+    // it's a label drawn between boxes). Called right before each section
+    // header (to close out the previous section's box) and once more at
+    // the very end.
+    function flushBox() {
+      if (!pageRowCount) return;
+      const boxHeight = pageRowCount * rowHeight;
+      doc.setDrawColor(220);
+      doc.rect(margin, pageStartY, tableWidth, boxHeight);
+      for (let i=1;i<pageRowCount;i++) {
+        doc.setDrawColor(230);
+        doc.line(margin, pageStartY + i*rowHeight, margin+tableWidth, pageStartY + i*rowHeight);
+      }
+      for (let i=0;i<=7;i++) {
+        const x = margin + nameColWidth + i*dayColWidth;
+        doc.setDrawColor(220);
+        doc.line(x, pageStartY, x, pageStartY + boxHeight);
+      }
     }
-    const rowY = y + ri*rowHeight;
-    doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(0);
-    doc.text(emp.name, margin+6, rowY + rowHeight/2 + 3);
-    weekDates.forEach((d,ci) => {
-      const dayShifts = relevant.filter(s => s.employeeId===emp.id && isSameDay(s.date,d)).sort((a,b)=>a.startTime-b.startTime);
-      const cellX = margin + nameColWidth + ci*dayColWidth;
-      dayShifts.forEach((sh, si) => {
-        const segH = (rowHeight-4) / dayShifts.length;
-        const segY = rowY + 2 + si*segH;
-        const [r,g,b] = hexToRgb(roleColor(sh.role));
-        doc.setFillColor(r,g,b); doc.setGState(new doc.GState({opacity:0.18}));
-        doc.roundedRect(cellX+2, segY, dayColWidth-4, segH-1, 3, 3, 'F');
-        doc.setGState(new doc.GState({opacity:1}));
-        doc.setDrawColor(r,g,b);
-        doc.roundedRect(cellX+2, segY, dayColWidth-4, segH-1, 3, 3, 'S');
-        doc.setTextColor(r,g,b); doc.setFont('helvetica','bold'); doc.setFontSize(8);
-        doc.text(formatTime(sh.startTime) + (sh.vacuumDuty ? ' (V)' : '') + (sh.ventCleaning ? ' (VC)' : ''), cellX + dayColWidth/2, segY + segH/2 + 3, { align: 'center' });
+
+    sectionsToRender.forEach(section => {
+      if (section.role) {
+        flushBox();
+        if (y > pageHeight - margin - sectionHeaderHeight - 60) {
+          doc.addPage(); y = margin;
+        }
+        doc.setFillColor(217,217,217); doc.rect(margin, y, tableWidth, sectionHeaderHeight, 'F');
+        doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(90);
+        doc.text(filterChipTitle(section.role).toUpperCase(), margin+6, y+13);
+        doc.setTextColor(0);
+        y += sectionHeaderHeight;
+        pageStartY = y;
+        pageRowCount = 0;
+      }
+      section.employees.forEach(emp => {
+        if (y > pageHeight - margin - rowHeight - 60) {
+          flushBox();
+          doc.addPage(); y = margin; pageStartY = margin; pageRowCount = 0;
+        }
+        const rowY = y;
+        doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(0);
+        doc.text(emp.name, margin+6, rowY + rowHeight/2 + 3);
+        weekDates.forEach((d,ci) => {
+          const dayShifts = relevant.filter(s => s.employeeId===emp.id && isSameDay(s.date,d)).sort((a,b)=>a.startTime-b.startTime);
+          const cellX = margin + nameColWidth + ci*dayColWidth;
+          dayShifts.forEach((sh, si) => {
+            const segH = (rowHeight-4) / dayShifts.length;
+            const segY = rowY + 2 + si*segH;
+            const [r,g,b] = hexToRgb(roleColor(sh.role));
+            doc.setFillColor(r,g,b); doc.setGState(new doc.GState({opacity:0.18}));
+            doc.roundedRect(cellX+2, segY, dayColWidth-4, segH-1, 3, 3, 'F');
+            doc.setGState(new doc.GState({opacity:1}));
+            doc.setDrawColor(r,g,b);
+            doc.roundedRect(cellX+2, segY, dayColWidth-4, segH-1, 3, 3, 'S');
+            doc.setTextColor(r,g,b); doc.setFont('helvetica','bold'); doc.setFontSize(8);
+            doc.text(formatTime(sh.startTime) + (sh.vacuumDuty ? ' (V)' : '') + (sh.ventCleaning ? ' (VC)' : ''), cellX + dayColWidth/2, segY + segH/2 + 3, { align: 'center' });
+          });
+        });
+        y += rowHeight;
+        pageRowCount++;
       });
     });
-    // row separator
-    doc.setDrawColor(230);
-    doc.line(margin, rowY+rowHeight, margin+tableWidth, rowY+rowHeight);
-  });
-  // vertical lines
-  for (let i=0;i<=7;i++) {
-    const x = margin + nameColWidth + i*dayColWidth;
-    doc.setDrawColor(220);
-    doc.line(x, y, x, y + Math.max(rowEmployees.length,1)*rowHeight);
+    flushBox();
   }
-  doc.setDrawColor(220);
-  doc.line(margin, y, margin, y + Math.max(rowEmployees.length,1)*rowHeight);
 
   // Legend
-  let legendY = y + Math.max(rowEmployees.length,1)*rowHeight + 24;
+  let legendY = y + 24;
   const rolesUsed = [...new Set(relevant.map(s=>s.role))];
   let legendX = margin;
   doc.setFontSize(9); doc.setFont('helvetica','normal');
