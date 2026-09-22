@@ -1854,17 +1854,7 @@ function attachShiftEditorHandlers() {
       onConfirm: async () => {
         await deleteShift(existingShift.id);
         state.modals.shiftEditor = null;
-        const weekDates = getWeekDates(state.build.anchorDate);
-        const count = draftCountForWeek(weekDates, state.build.roleFilter);
         render();
-        if (count > 0) {
-          showConfirm({
-            title: "Publish This Week's Schedule?",
-            message: `Shift deleted. Want to publish the remaining ${count} draft shift(s) now?`,
-            confirmLabel: 'Publish',
-            onConfirm: async () => { await publishDraftShifts(weekDates, state.build.roleFilter); render(); }
-          });
-        }
       }
     });
   });
