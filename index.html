@@ -2354,8 +2354,9 @@ function exportSchedulePDF(weekDates, roleFilter) {
   y += 20;
 
   if (!totalEmployeeCount) {
-    doc.setDrawColor(200);
+    doc.setDrawColor(120); doc.setLineWidth(1.1);
     doc.rect(margin, y, tableWidth, rowHeight);
+    doc.setLineWidth(0.5);
     doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(150);
     doc.text('No published shifts for this selection.', margin+6, y+16);
     doc.setTextColor(0);
@@ -2372,17 +2373,19 @@ function exportSchedulePDF(weekDates, roleFilter) {
     function flushBox() {
       if (!pageRowCount) return;
       const boxHeight = pageRowCount * rowHeight;
-      doc.setDrawColor(220);
+      doc.setDrawColor(120); doc.setLineWidth(1.1);
       doc.rect(margin, pageStartY, tableWidth, boxHeight);
+      doc.setLineWidth(0.75);
       for (let i=1;i<pageRowCount;i++) {
-        doc.setDrawColor(230);
+        doc.setDrawColor(170);
         doc.line(margin, pageStartY + i*rowHeight, margin+tableWidth, pageStartY + i*rowHeight);
       }
       for (let i=0;i<=7;i++) {
         const x = margin + nameColWidth + i*dayColWidth;
-        doc.setDrawColor(220);
+        doc.setDrawColor(170);
         doc.line(x, pageStartY, x, pageStartY + boxHeight);
       }
+      doc.setLineWidth(0.5);
     }
 
     sectionsToRender.forEach(section => {
