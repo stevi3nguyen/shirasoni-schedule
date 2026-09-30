@@ -266,6 +266,7 @@ const state = {
   shifts: [],
   timeOffRequests: [],
   swapRequests: [],
+  bulletinPosts: [],
   authError: null,
   profilePhotoUploading: false,
   authMode: 'signin',      // 'signin' | 'signup'
@@ -291,6 +292,8 @@ const state = {
     swapForm: {},
     timeOffDetail: null,   // request for manager approval detail
     colorLegend: false,
+    bulletinComposer: false,
+    bulletinForm: {},
     confirm: null,         // { title, message, confirmLabel, danger, onConfirm }
   },
 };
@@ -335,6 +338,21 @@ function formatDateFull(date) {
   return date.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', year:'numeric' });
 }
 function weekdayAbbr(date){ return date.toLocaleDateString('en-US', {weekday:'short'}); }
+// e.g. "3h ago", "2d ago" — used on Bulletin Board posts. Falls back to a
+// short date once something's more than a week old, since "9d ago" reads
+// worse than just seeing the date at that point.
+function timeAgo(date) {
+  if (!date) return '';
+  const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return formatDateShort(date);
+}
 function weekRangeLabel(weekDates) {
   return `${formatDateShort(weekDates[0])} – ${formatDateShort(weekDates[6])}`;
 }
@@ -451,6 +469,15 @@ function startDataListeners() {
       render();
     }, err => console.error(err))
   );
+  unsubDataListeners.push(
+    db.collection('bulletinPosts').orderBy('createdAt', 'desc').onSnapshot(snap => {
+      state.bulletinPosts = snap.docs.map(d => {
+        const data = d.data();
+        return { id: d.id, ...data, createdAt: toDate(data.createdAt) };
+      });
+      render();
+    }, err => console.error(err))
+  );
 }
 function stopDataListeners() {
   unsubDataListeners.forEach(fn => fn());
@@ -466,7 +493,7 @@ auth.onAuthStateChanged(user => {
   } else {
     state.employee = null;
     state.employeeLookupCompleted = false;
-    state.employees = []; state.shifts = []; state.timeOffRequests = []; state.swapRequests = [];
+    state.employees = []; state.shifts = []; state.timeOffRequests = []; state.swapRequests = []; state.bulletinPosts = [];
     stopDataListeners();
     if (unsubEmployeeListener) { unsubEmployeeListener(); unsubEmployeeListener = null; }
   }
@@ -581,6 +608,32 @@ async function deleteSwapRequest(id) {
 }
 
 // ============================================================================
+// BULLETIN BOARD
+// ============================================================================
+async function postBulletin(message) {
+  const trimmed = (message || '').trim();
+  if (!trimmed || !state.employee) return;
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+  await db.collection('bulletinPosts').add({
+    authorId: state.employee.id,
+    authorName: state.employee.name,
+    message: trimmed,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    expiresAt: expiresAt,
+  });
+}
+async function deleteBulletinPost(id) {
+  await db.collection('bulletinPosts').doc(id).delete();
+}
+// A manager can delete anyone's post; anyone else can only delete their own —
+// mirrors the Firestore security rule, so this button only shows where the
+// delete would actually succeed.
+function canDeleteBulletinPost(post) {
+  return !!state.employee?.isManager || post.authorId === state.employee?.id;
+}
+
+// ============================================================================
 // EMPLOYEES
 // ============================================================================
 async function addEmployee(name, role, isManager) {
@@ -659,6 +712,7 @@ const ICONS = {
   sun: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`,
   swap: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m17 2 4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3"/></svg>`,
   camera: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2"><path d="M3 9a2 2 0 0 1 2-2h1.5l1-1.5h9l1 1.5H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><circle cx="12" cy="13" r="3.5"/></svg>`,
+  pin: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 17v5M9 3h6l1 6 3 2v2H5v-2l3-2Z"/></svg>`,
   vacuum: `<span style="font-size:1em;line-height:1;">🧹</span>`,
 };
 
@@ -808,6 +862,7 @@ function renderApp() {
   let body = '';
   if (state.tab === 'schedule') body = renderScheduleTab();
   else if (state.tab === 'requests') body = renderRequestsTab();
+  else if (state.tab === 'bulletin') body = renderBulletinTab();
   else if (state.tab === 'build' && isManager) body = renderBuildTab();
   else if (state.tab === 'approvals' && isManager) body = renderApprovalsTab();
   else if (state.tab === 'profile') body = renderProfileTab();
@@ -829,6 +884,9 @@ function renderApp() {
       <button class="tab-item ${state.tab==='requests'?'active':''}" data-tab="requests">
         ${reqBadge > 0 ? `<span class="tab-badge">${reqBadge}</span>` : ''}
         ${ICONS.mail}<span>Requests</span>
+      </button>
+      <button class="tab-item ${state.tab==='bulletin'?'active':''}" data-tab="bulletin">
+        ${ICONS.pin}<span>Bulletin</span>
       </button>
       ${isManager ? `
         <button class="tab-item ${state.tab==='build'?'active':''}" data-tab="build">
@@ -854,6 +912,7 @@ function attachAppHandlers() {
   attachScheduleHandlers();
   attachBuildHandlers();
   attachRequestsHandlers();
+  attachBulletinHandlers();
   attachApprovalsHandlers();
   attachProfileHandlers();
   attachManageStaffHandlers();
