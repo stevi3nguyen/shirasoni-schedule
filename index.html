@@ -211,6 +211,63 @@ function sectionSubOrder(role) {
 function roleColor(role) { return ROLE_COLORS[role] || '#8b8b8b'; }
 
 // ============================================================================
+// AVAILABILITY — mirrors DayAvailability/DayAvailabilityStatus in the iOS
+// app. General weekly availability an employee sets for themselves, read
+// (not enforced) by whoever's building the schedule. Times are stored as
+// display strings like "9:00 AM" (matching the iOS app's format exactly, so
+// a day set on one platform reads correctly on the other) rather than as
+// real Date values — this is a heads-up for a human, not something anything
+// computes against.
+// ============================================================================
+const ORDERED_DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+const DAY_STATUSES = ['Available','Limited Hours','Not Available'];
+// Literal hex (matching the --green/--orange/--red custom properties) rather
+// than var(--...) references — these get an alpha suffix appended directly
+// as a string (e.g. "#22c55e22") for badge backgrounds, which only produces
+// valid CSS with a real hex literal, not a var() reference.
+function availabilityStatusColor(status) {
+  if (status === 'Limited Hours') return '#f97316';
+  if (status === 'Not Available') return '#ef4444';
+  return '#22c55e';
+}
+function defaultDayAvailability() {
+  return { status: 'Available', startTime: '9:00 AM', endTime: '5:00 PM' };
+}
+function defaultAvailabilityWeek() {
+  const week = {};
+  ORDERED_DAYS.forEach(day => { week[day] = defaultDayAvailability(); });
+  return week;
+}
+// Always has an entry for every day, whether or not this employee has
+// customized theirs yet — the one function views should actually call.
+function employeeAvailability(employee) {
+  return (employee && employee.availability) || defaultAvailabilityWeek();
+}
+// <input type="time"> works in 24-hour "HH:MM" values — these convert to/from
+// the "9:00 AM"-style display string that's actually stored, so the stored
+// format stays identical to what the iOS app writes and reads.
+function timeInputToDisplay(hhmm) {
+  if (!hhmm) return '9:00 AM';
+  const [hStr, mStr] = hhmm.split(':');
+  let h = parseInt(hStr, 10);
+  const m = (mStr || '00').padStart(2, '0');
+  const suffix = h >= 12 ? 'PM' : 'AM';
+  let h12 = h % 12;
+  if (h12 === 0) h12 = 12;
+  return `${h12}:${m} ${suffix}`;
+}
+function displayTimeToInputValue(display) {
+  const match = (display || '').trim().match(/^(\d{1,2}):(\d{2})\s*([AaPp][Mm])$/);
+  if (!match) return '09:00';
+  let h = parseInt(match[1], 10);
+  const m = match[2];
+  const suffix = match[3].toUpperCase();
+  if (suffix === 'PM' && h !== 12) h += 12;
+  if (suffix === 'AM' && h === 12) h = 0;
+  return `${String(h).padStart(2,'0')}:${m}`;
+}
+
+// ============================================================================
 // AVATARS — shows the person's uploaded photo if they have one, otherwise a
 // colored circle with their initials (same idea as Slack/Gmail defaults, and
 // matches the iOS app's AvatarView). Deterministic color from the name so
@@ -296,6 +353,8 @@ const state = {
     colorLegend: false,
     bulletinComposer: false,
     bulletinForm: {},
+    availabilityEditor: false, // editing your own weekly availability
+    availabilityForm: {},
     confirm: null,         // { title, message, confirmLabel, danger, onConfirm }
   },
 };
@@ -612,18 +671,30 @@ async function deleteSwapRequest(id) {
 // ============================================================================
 // BULLETIN BOARD
 // ============================================================================
-async function postBulletin(message) {
+// `pinned` is only actually honored when the poster is a manager — an
+// employee posting with pinned=true (which the composer UI never lets
+// happen anyway) is silently ignored, same rule the iOS app follows.
+//
+// A pinned post skips the `expiresAt` stamp entirely — Firestore's TTL
+// policy only ever acts on documents that actually HAVE that field, so
+// leaving it off is what keeps a pinned post from disappearing on the
+// normal two-week schedule. See setBulletinPostPinned for how pin/unpin
+// adds it back.
+async function postBulletin(message, pinned) {
   const trimmed = (message || '').trim();
   if (!trimmed || !state.employee) return;
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
-  await db.collection('bulletinPosts').add({
+  const actuallyPinned = !!(pinned && state.employee.isManager);
+  const data = {
     authorId: state.employee.id,
     authorName: state.employee.name,
     message: trimmed,
     createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-    expiresAt: expiresAt,
-  });
+    isPinned: actuallyPinned,
+  };
+  if (!actuallyPinned) {
+    data.expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+  }
+  await db.collection('bulletinPosts').add(data);
 }
 async function deleteBulletinPost(id) {
   await db.collection('bulletinPosts').doc(id).delete();
@@ -633,6 +704,32 @@ async function deleteBulletinPost(id) {
 // delete would actually succeed.
 function canDeleteBulletinPost(post) {
   return !!state.employee?.isManager || post.authorId === state.employee?.id;
+}
+// Pins or unpins a post so it stays above the regular feed — reserved for
+// managers, mirroring the Firestore rule that would reject the write from
+// anyone else. Pinning clears expiresAt (see postBulletin's comment above);
+// unpinning puts a fresh 14-days-from-now date back on, restarting the
+// countdown from right now rather than reviving whatever date it would have
+// originally expired on (likely already past, for a post pinned a while).
+async function setBulletinPostPinned(id, pinned) {
+  if (!state.employee?.isManager) return;
+  const data = { isPinned: !!pinned };
+  if (pinned) {
+    data.expiresAt = firebase.firestore.FieldValue.delete();
+  } else {
+    data.expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+  }
+  await db.collection('bulletinPosts').doc(id).update(data);
+}
+
+// Saves the signed-in employee's own weekly availability. `availability` is
+// already a plain object of {status, startTime, endTime} per day — the
+// Firestore JS SDK writes plain nested objects directly, no extra encoding
+// needed (unlike the iOS app, which has to build that dictionary by hand
+// from its own Codable struct).
+async function updateMyAvailability(availability) {
+  if (!state.employee?.id) return;
+  await db.collection('employees').doc(state.employee.id).update({ availability });
 }
 
 // ============================================================================
@@ -725,6 +822,7 @@ const ICONS = {
   swap: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m17 2 4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3"/></svg>`,
   camera: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2"><path d="M3 9a2 2 0 0 1 2-2h1.5l1-1.5h9l1 1.5H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><circle cx="12" cy="13" r="3.5"/></svg>`,
   pin: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 17v5M9 3h6l1 6 3 2v2H5v-2l3-2Z"/></svg>`,
+  clock: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>`,
   vacuum: `<span style="font-size:1em;line-height:1;">🧹</span>`,
 };
 
@@ -1490,17 +1588,27 @@ function attachRequestsHandlers() {
 // BULLETIN BOARD TAB
 // ============================================================================
 function renderBulletinTab() {
-  const posts = [...state.bulletinPosts].sort((a, b) => (b.createdAt||0) - (a.createdAt||0));
+  const sorted = [...state.bulletinPosts].sort((a, b) => (b.createdAt||0) - (a.createdAt||0));
+  const pinnedPosts = sorted.filter(p => p.isPinned);
+  const regularPosts = sorted.filter(p => !p.isPinned);
   return `
     <div class="topbar">
       <h1 class="page-title">Bulletin Board</h1>
       <button class="btn btn-primary btn-sm" id="bltn-new-btn">${ICONS.plus} Post</button>
     </div>
     <div class="content">
-      ${posts.length ? `
-        <div class="card" style="overflow:hidden;">
-          ${posts.map((p,i) => renderBulletinRow(p, i<posts.length-1)).join('')}
-        </div>
+      ${sorted.length ? `
+        ${pinnedPosts.length ? `
+          <div class="card" style="overflow:hidden;${regularPosts.length ? 'margin-bottom:16px;' : ''}">
+            ${pinnedPosts.map((p,i) => renderBulletinRow(p, i<pinnedPosts.length-1)).join('')}
+          </div>
+        ` : ''}
+        ${regularPosts.length ? `
+          ${pinnedPosts.length ? `<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.04em;margin:0 0 8px 2px;">Recent</div>` : ''}
+          <div class="card" style="overflow:hidden;">
+            ${regularPosts.map((p,i) => renderBulletinRow(p, i<regularPosts.length-1)).join('')}
+          </div>
+        ` : ''}
       ` : `
         <div style="text-align:center;padding:60px 20px;color:var(--text-secondary);">
           ${ICONS.pin}
@@ -1511,16 +1619,22 @@ function renderBulletinTab() {
     </div>
   `;
 }
+const PIN_ICON_SMALL = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 17v5M9 3h6l1 6 3 2v2H5v-2l3-2Z"/></svg>`;
 function renderBulletinRow(p, divider) {
   const canDelete = canDeleteBulletinPost(p);
+  const isManager = !!state.employee?.isManager;
   return `
     <div style="padding:14px 16px;${divider?'border-bottom:1px solid var(--border);':''}">
+      ${p.isPinned ? `<div style="display:flex;align-items:center;gap:4px;color:var(--orange);font-size:11px;font-weight:700;margin-bottom:4px;">${PIN_ICON_SMALL}<span>Pinned</span></div>` : ''}
       <div style="font-size:14px;white-space:pre-wrap;line-height:1.4;">${escapeHtml(p.message)}</div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
         <div style="color:var(--text-secondary);font-size:12px;">
           <span style="font-weight:600;">${escapeHtml(p.authorName)}</span> · ${timeAgo(p.createdAt)}
         </div>
-        ${canDelete ? `<button data-delete-bulletin="${p.id}" style="background:none;border:none;color:var(--text-tertiary);font-size:12px;font-weight:600;padding:0;cursor:pointer;">Delete</button>` : ''}
+        <div style="display:flex;gap:14px;">
+          ${isManager ? `<button data-pin-bulletin="${p.id}" data-pinned="${!!p.isPinned}" style="background:none;border:none;color:var(--orange);font-size:12px;font-weight:600;padding:0;cursor:pointer;">${p.isPinned ? 'Unpin' : 'Pin'}</button>` : ''}
+          ${canDelete ? `<button data-delete-bulletin="${p.id}" style="background:none;border:none;color:var(--text-tertiary);font-size:12px;font-weight:600;padding:0;cursor:pointer;">Delete</button>` : ''}
+        </div>
       </div>
     </div>
   `;
@@ -1529,19 +1643,32 @@ function attachBulletinHandlers() {
   if (state.tab !== 'bulletin') return;
   document.getElementById('bltn-new-btn')?.addEventListener('click', () => {
     state.modals.bulletinComposer = true;
-    state.modals.bulletinForm = { message: '' };
+    state.modals.bulletinForm = { message: '', pinned: false };
     render();
   });
   document.querySelectorAll('[data-delete-bulletin]').forEach(el => el.addEventListener('click', () => {
     const id = el.dataset.deleteBulletin;
     showConfirm({ title: 'Delete Post?', message: 'This removes it from the Bulletin Board for everyone.', confirmLabel: 'Delete', danger: true, onConfirm: () => deleteBulletinPost(id) });
   }));
+  document.querySelectorAll('[data-pin-bulletin]').forEach(el => el.addEventListener('click', () => {
+    const id = el.dataset.pinBulletin;
+    const currentlyPinned = el.dataset.pinned === 'true';
+    setBulletinPostPinned(id, !currentlyPinned);
+  }));
 }
 function renderBulletinComposerModal() {
   const f = state.modals.bulletinForm;
+  const isManager = !!state.employee?.isManager;
   return modalWrap('New Post', `
     <textarea id="bltn-message" rows="5" placeholder="Post something everyone on staff should see..." style="width:100%;box-sizing:border-box;resize:vertical;font:inherit;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);">${escapeHtml(f.message||'')}</textarea>
     <p style="margin:8px 0 0;color:var(--text-tertiary);font-size:12px;">Visible to all staff. Automatically removed after two weeks — you or a manager can delete it sooner.</p>
+    ${isManager ? `
+      <label style="display:flex;align-items:center;gap:8px;margin-top:14px;font-size:14px;cursor:pointer;">
+        <input type="checkbox" id="bltn-pin" ${f.pinned ? 'checked' : ''} />
+        Pin this post
+      </label>
+      <p style="margin:4px 0 0;color:var(--text-tertiary);font-size:12px;">Pinned posts stay at the top of the board, above everything else, and don't auto-expire — good for things like a policy change or holiday hours.</p>
+    ` : ''}
   `, `
     <button class="btn btn-secondary" id="bltn-cancel">Cancel</button>
     <button class="btn btn-primary" id="bltn-post" ${!(f.message||'').trim() ? 'disabled' : ''}>Post</button>
@@ -1556,12 +1683,76 @@ function attachBulletinComposerHandlers() {
     const postBtn = document.getElementById('bltn-post');
     if (postBtn) postBtn.disabled = !e.target.value.trim();
   });
+  document.getElementById('bltn-pin')?.addEventListener('change', (e) => {
+    state.modals.bulletinForm.pinned = e.target.checked;
+  });
   document.getElementById('bltn-post')?.addEventListener('click', async () => {
     const message = state.modals.bulletinForm.message || '';
+    const pinned = !!state.modals.bulletinForm.pinned;
     state.modals.bulletinComposer = false;
     state.modals.bulletinForm = {};
-    await postBulletin(message);
+    await postBulletin(message, pinned);
     render();
+  });
+}
+
+// ============================================================================
+// MY AVAILABILITY EDITOR (Profile tab)
+// ============================================================================
+function renderAvailabilityEditorModal() {
+  const form = state.modals.availabilityForm;
+  const rows = ORDERED_DAYS.map(day => {
+    const d = form[day] || defaultDayAvailability();
+    return `
+      <div style="padding:10px 0;border-bottom:1px solid var(--border);">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:14px;font-weight:600;">${day}</span>
+          <select data-avail-status="${day}" class="input" style="width:auto;padding:6px 10px;font-size:13px;">
+            ${DAY_STATUSES.map(s => `<option value="${s}" ${s===d.status?'selected':''}>${s}</option>`).join('')}
+          </select>
+        </div>
+        ${d.status === 'Limited Hours' ? `
+          <div style="display:flex;gap:10px;margin-top:8px;align-items:center;">
+            <input type="time" data-avail-start="${day}" class="input" value="${displayTimeToInputValue(d.startTime)}" style="flex:1;">
+            <span style="color:var(--text-tertiary);font-size:12px;">to</span>
+            <input type="time" data-avail-end="${day}" class="input" value="${displayTimeToInputValue(d.endTime)}" style="flex:1;">
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }).join('');
+  return modalWrap('My Availability', `
+    <div>${rows}</div>
+    <p style="margin:10px 0 0;color:var(--text-tertiary);font-size:12px;">This is just a heads-up for whoever's building the schedule — it doesn't block anything automatically. Update it anytime your availability changes.</p>
+  `, `
+    <button class="btn btn-secondary" id="avail-cancel">Cancel</button>
+    <button class="btn btn-primary" id="avail-save">Save</button>
+  `, 'avail-close');
+}
+function attachAvailabilityEditorModalHandlers() {
+  const form = state.modals.availabilityForm;
+  const close = () => { state.modals.availabilityEditor = false; state.modals.availabilityForm = {}; render(); };
+  document.getElementById('avail-close')?.addEventListener('click', close);
+  document.getElementById('avail-cancel')?.addEventListener('click', close);
+  document.querySelectorAll('[data-avail-status]').forEach(el => el.addEventListener('change', (e) => {
+    const day = el.dataset.availStatus;
+    if (!form[day]) form[day] = defaultDayAvailability();
+    form[day].status = e.target.value;
+    render(); // re-render to show/hide the time pickers for this day
+  }));
+  document.querySelectorAll('[data-avail-start]').forEach(el => el.addEventListener('change', (e) => {
+    const day = el.dataset.availStart;
+    if (!form[day]) form[day] = defaultDayAvailability();
+    form[day].startTime = timeInputToDisplay(e.target.value);
+  }));
+  document.querySelectorAll('[data-avail-end]').forEach(el => el.addEventListener('change', (e) => {
+    const day = el.dataset.availEnd;
+    if (!form[day]) form[day] = defaultDayAvailability();
+    form[day].endTime = timeInputToDisplay(e.target.value);
+  }));
+  document.getElementById('avail-save')?.addEventListener('click', async () => {
+    await updateMyAvailability(form);
+    close();
   });
 }
 
@@ -1757,6 +1948,10 @@ function renderProfileTab() {
       </div>
       <p style="color:var(--text-tertiary);font-size:12px;margin:0 0 20px;">Tap your name to edit it.</p>
 
+      <button id="profile-availability" class="card btn-block" style="display:flex;justify-content:space-between;align-items:center;padding:16px;background:var(--bg-elevated);border:1px solid var(--border);color:var(--text);text-align:left;margin-bottom:10px;font-size:15px;font-weight:600;">
+        <span style="display:flex;align-items:center;gap:10px;">${ICONS.clock} My Availability</span>${ICONS.chevRight}
+      </button>
+
       <button id="${isManager ? 'profile-manage-staff' : 'profile-view-staff'}" class="card btn-block" style="display:flex;justify-content:space-between;align-items:center;padding:16px;background:var(--bg-elevated);border:1px solid var(--border);color:var(--text);text-align:left;margin-bottom:20px;font-size:15px;font-weight:600;">
         <span style="display:flex;align-items:center;gap:10px;">${ICONS.user} ${isManager ? 'Manage Staff' : 'View Staff'}</span>${ICONS.chevRight}
       </button>
@@ -1771,6 +1966,13 @@ function attachProfileHandlers() {
   const $ = id => document.getElementById(id);
   $('profile-edit-name')?.addEventListener('click', () => { state.modals.editName = true; state.modals.editNameValue = state.employee.name; render(); });
   $('profile-signout')?.addEventListener('click', signOut);
+  $('profile-availability')?.addEventListener('click', () => {
+    // Deep-copies the current (or default) availability into the form so
+    // edits don't mutate state.employee directly until Save is tapped.
+    state.modals.availabilityEditor = true;
+    state.modals.availabilityForm = JSON.parse(JSON.stringify(employeeAvailability(state.employee)));
+    render();
+  });
   $('profile-manage-staff')?.addEventListener('click', () => { state.tab = 'manageStaff'; render(); });
   $('profile-view-staff')?.addEventListener('click', () => { state.tab = 'viewStaff'; render(); });
   $('profile-photo-input')?.addEventListener('change', (e) => {
@@ -1806,11 +2008,12 @@ function renderManageStaffTab() {
                 <div style="color:var(--text-secondary);font-size:13px;">${e.role}</div>
               </div>
             </button>
+            <button data-employee-preview="${e.id}" title="View availability" style="background:none;border:none;color:var(--text-tertiary);padding:6px;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></button>
             <button data-ms-delete="${e.id}" style="background:none;border:none;color:var(--red);padding:6px;cursor:pointer;">${ICONS.trash}</button>
           </div>
         `).join('') || `<div style="padding:30px;text-align:center;color:var(--text-tertiary);">No staff yet.</div>`}
       </div>
-      <p style="color:var(--text-tertiary);font-size:12px;margin-top:10px;">Tap anyone to edit their name, role, or manager access.</p>
+      <p style="color:var(--text-tertiary);font-size:12px;margin-top:10px;">Tap anyone to edit their name, role, or manager access. Tap the clock icon to see their availability.</p>
     </div>
   `;
 }
@@ -1909,6 +2112,7 @@ function renderModals() {
   if (m.timeOffDetail) html += renderTimeOffDetailModal();
   if (m.colorLegend) html += renderColorLegendModal();
   if (m.bulletinComposer) html += renderBulletinComposerModal();
+  if (m.availabilityEditor) html += renderAvailabilityEditorModal();
   if (m.confirm) html += renderConfirmModal();
   if (m.alert) html += renderAlertModal();
   return html;
@@ -2084,16 +2288,32 @@ function attachShiftDetailHandlers() {
 }
 
 // ---- Employee profile preview (tapping a name anywhere on the schedule) ----
+// Availability is included right here — the same preview sheet opened from
+// the schedule grid's name column — specifically so a manager building the
+// schedule can check it without leaving the builder. (Manage Staff also
+// links into this same preview for that reason.)
 function renderEmployeePreviewModal() {
   const emp = state.modals.employeePreview;
+  const availability = employeeAvailability(emp);
   return modalWrap('Profile', `
-    <div style="display:flex;flex-direction:column;align-items:center;gap:10px;padding:10px 0;">
+    <div style="display:flex;flex-direction:column;align-items:center;gap:10px;padding:10px 0 16px;">
       ${avatarHtml(emp.name, emp.photoURL, 100, emp.authUID)}
       <div style="font-size:18px;font-weight:700;">${escapeHtml(emp.name)}</div>
       <div style="display:flex;align-items:center;gap:8px;">
         <span style="color:var(--text-secondary);font-size:14px;">${emp.role}</span>
         ${emp.isManager ? `<span class="badge" style="background:#6366f122;color:#6366f1;">Manager</span>` : ''}
       </div>
+    </div>
+    <div style="border-top:1px solid var(--border);padding-top:14px;">
+      <div style="font-size:13px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Availability</div>
+      ${ORDERED_DAYS.map(day => {
+        const d = availability[day] || defaultDayAvailability();
+        const times = d.status === 'Limited Hours' ? `<span style="color:var(--text-secondary);font-size:12px;margin-right:8px;">${escapeHtml(d.startTime)} – ${escapeHtml(d.endTime)}</span>` : '';
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border);">
+          <span style="font-size:14px;">${day}</span>
+          <div style="display:flex;align-items:center;">${times}<span class="badge" style="background:${availabilityStatusColor(d.status)}22;color:${availabilityStatusColor(d.status)};">${d.status}</span></div>
+        </div>`;
+      }).join('')}
     </div>
   `, `<button class="btn btn-primary" id="ep-close2">Done</button>`, 'ep-close');
 }
@@ -2433,6 +2653,7 @@ function attachModalHandlers() {
   if (state.modals.timeOffDetail) attachTimeOffDetailHandlers();
   if (state.modals.colorLegend) attachColorLegendHandlers();
   if (state.modals.bulletinComposer) attachBulletinComposerHandlers();
+  if (state.modals.availabilityEditor) attachAvailabilityEditorModalHandlers();
   if (state.modals.confirm) attachConfirmHandlers();
   if (state.modals.alert) attachAlertHandlers();
 }
