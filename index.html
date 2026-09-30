@@ -1475,6 +1475,85 @@ function attachRequestsHandlers() {
 }
 
 // ============================================================================
+// BULLETIN BOARD TAB
+// ============================================================================
+function renderBulletinTab() {
+  const posts = [...state.bulletinPosts].sort((a, b) => (b.createdAt||0) - (a.createdAt||0));
+  return `
+    <div class="topbar">
+      <h1 class="page-title">Bulletin Board</h1>
+      <button class="btn btn-primary btn-sm" id="bltn-new-btn">${ICONS.plus} Post</button>
+    </div>
+    <div class="content">
+      ${posts.length ? `
+        <div class="card" style="overflow:hidden;">
+          ${posts.map((p,i) => renderBulletinRow(p, i<posts.length-1)).join('')}
+        </div>
+      ` : `
+        <div style="text-align:center;padding:60px 20px;color:var(--text-secondary);">
+          ${ICONS.pin}
+          <p style="font-weight:600;margin:12px 0 4px;color:var(--text-primary);">No posts yet</p>
+          <p style="font-size:14px;margin:0;">Post something everyone on staff should see — it'll stay up for two weeks.</p>
+        </div>
+      `}
+    </div>
+  `;
+}
+function renderBulletinRow(p, divider) {
+  const canDelete = canDeleteBulletinPost(p);
+  return `
+    <div style="padding:14px 16px;${divider?'border-bottom:1px solid var(--border);':''}">
+      <div style="font-size:14px;white-space:pre-wrap;line-height:1.4;">${escapeHtml(p.message)}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
+        <div style="color:var(--text-secondary);font-size:12px;">
+          <span style="font-weight:600;">${escapeHtml(p.authorName)}</span> · ${timeAgo(p.createdAt)}
+        </div>
+        ${canDelete ? `<button data-delete-bulletin="${p.id}" style="background:none;border:none;color:var(--text-tertiary);font-size:12px;font-weight:600;padding:0;cursor:pointer;">Delete</button>` : ''}
+      </div>
+    </div>
+  `;
+}
+function attachBulletinHandlers() {
+  if (state.tab !== 'bulletin') return;
+  document.getElementById('bltn-new-btn')?.addEventListener('click', () => {
+    state.modals.bulletinComposer = true;
+    state.modals.bulletinForm = { message: '' };
+    render();
+  });
+  document.querySelectorAll('[data-delete-bulletin]').forEach(el => el.addEventListener('click', () => {
+    const id = el.dataset.deleteBulletin;
+    showConfirm({ title: 'Delete Post?', message: 'This removes it from the Bulletin Board for everyone.', confirmLabel: 'Delete', danger: true, onConfirm: () => deleteBulletinPost(id) });
+  }));
+}
+function renderBulletinComposerModal() {
+  const f = state.modals.bulletinForm;
+  return modalWrap('New Post', `
+    <textarea id="bltn-message" rows="5" placeholder="Post something everyone on staff should see..." style="width:100%;box-sizing:border-box;resize:vertical;font:inherit;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);">${escapeHtml(f.message||'')}</textarea>
+    <p style="margin:8px 0 0;color:var(--text-tertiary);font-size:12px;">Visible to all staff. Automatically removed after two weeks — you or a manager can delete it sooner.</p>
+  `, `
+    <button class="btn btn-secondary" id="bltn-cancel">Cancel</button>
+    <button class="btn btn-primary" id="bltn-post" ${!(f.message||'').trim() ? 'disabled' : ''}>Post</button>
+  `, 'bltn-close');
+}
+function attachBulletinComposerHandlers() {
+  const close = () => { state.modals.bulletinComposer = false; state.modals.bulletinForm = {}; render(); };
+  document.getElementById('bltn-close')?.addEventListener('click', close);
+  document.getElementById('bltn-cancel')?.addEventListener('click', close);
+  document.getElementById('bltn-message')?.addEventListener('input', (e) => {
+    state.modals.bulletinForm.message = e.target.value;
+    const postBtn = document.getElementById('bltn-post');
+    if (postBtn) postBtn.disabled = !e.target.value.trim();
+  });
+  document.getElementById('bltn-post')?.addEventListener('click', async () => {
+    const message = state.modals.bulletinForm.message || '';
+    state.modals.bulletinComposer = false;
+    state.modals.bulletinForm = {};
+    await postBulletin(message);
+    render();
+  });
+}
+
+// ============================================================================
 // APPROVALS TAB (manager)
 // ============================================================================
 function renderApprovalsTab() {
@@ -1817,6 +1896,7 @@ function renderModals() {
   if (m.swap) html += renderSwapFormModal();
   if (m.timeOffDetail) html += renderTimeOffDetailModal();
   if (m.colorLegend) html += renderColorLegendModal();
+  if (m.bulletinComposer) html += renderBulletinComposerModal();
   if (m.confirm) html += renderConfirmModal();
   if (m.alert) html += renderAlertModal();
   return html;
@@ -2340,6 +2420,7 @@ function attachModalHandlers() {
   if (state.modals.swap) attachSwapFormHandlers();
   if (state.modals.timeOffDetail) attachTimeOffDetailHandlers();
   if (state.modals.colorLegend) attachColorLegendHandlers();
+  if (state.modals.bulletinComposer) attachBulletinComposerHandlers();
   if (state.modals.confirm) attachConfirmHandlers();
   if (state.modals.alert) attachAlertHandlers();
 }
