@@ -353,10 +353,13 @@ const state = {
     colorLegend: false,
     bulletinComposer: false,
     bulletinForm: {},
+    bulletinDetail: null,   // bulletin post whose full view/comment thread is open
+    commentDraft: '',
     availabilityEditor: false, // editing your own weekly availability
     availabilityForm: {},
     confirm: null,         // { title, message, confirmLabel, danger, onConfirm }
   },
+  bulletinComments: [],    // comments for whichever post modals.bulletinDetail currently has open
 };
 
 // ============================================================================
@@ -432,6 +435,11 @@ function escapeHtml(str) {
 // AUTH
 // ============================================================================
 let unsubEmployeeListener = null;
+// Comments are only ever watched for whichever one bulletin post is currently
+// open in the detail modal — not subscribed globally for every post in the
+// feed — so this single listener is started when that modal opens and
+// stopped when it closes (mirrors the iOS app's per-detail-view lifecycle).
+let unsubBulletinComments = null;
 let unsubDataListeners = [];
 
 async function signUp(email, password, name, role) {
@@ -696,7 +704,19 @@ async function postBulletin(message, pinned) {
   }
   await db.collection('bulletinPosts').add(data);
 }
+// Firestore does NOT cascade-delete a subcollection when its parent document
+// is deleted, so a post's comments have to be cleaned up by hand here first —
+// otherwise they'd be left behind as an orphaned subcollection with nothing
+// left to display them. (A post swept away later by the 14-day TTL policy
+// instead of this button doesn't go through this code path, so that edge
+// case is a known, harmless, low-impact gap — same as the iOS app.)
 async function deleteBulletinPost(id) {
+  const commentsSnap = await db.collection('bulletinPosts').doc(id).collection('comments').get();
+  if (!commentsSnap.empty) {
+    const batch = db.batch();
+    commentsSnap.forEach(doc => batch.delete(doc.ref));
+    await batch.commit();
+  }
   await db.collection('bulletinPosts').doc(id).delete();
 }
 // A manager can delete anyone's post; anyone else can only delete their own —
@@ -730,6 +750,48 @@ async function setBulletinPostPinned(id, pinned) {
 async function updateMyAvailability(availability) {
   if (!state.employee?.id) return;
   await db.collection('employees').doc(state.employee.id).update({ availability });
+}
+
+// Starts watching one post's comment thread (bulletinPosts/{postId}/comments)
+// live. Call stopListeningToComments() when the detail modal closes so we're
+// never running more than one of these at a time.
+function startListeningToComments(postId) {
+  stopListeningToComments();
+  unsubBulletinComments = db.collection('bulletinPosts').doc(postId).collection('comments')
+    .orderBy('createdAt', 'asc')
+    .onSnapshot(snap => {
+      state.bulletinComments = snap.docs.map(d => {
+        const data = d.data();
+        return { id: d.id, ...data, createdAt: toDate(data.createdAt) };
+      });
+      render();
+    }, err => console.error('comments listener error', err));
+}
+function stopListeningToComments() {
+  if (unsubBulletinComments) {
+    unsubBulletinComments();
+    unsubBulletinComments = null;
+  }
+  state.bulletinComments = [];
+}
+async function postBulletinComment(postId, message) {
+  const trimmed = (message || '').trim();
+  if (!trimmed || !state.employee || !postId) return;
+  await db.collection('bulletinPosts').doc(postId).collection('comments').add({
+    authorId: state.employee.id,
+    authorName: state.employee.name,
+    message: trimmed,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+  });
+}
+// Same rule as canDeleteBulletinPost: a manager can delete any comment,
+// anyone else can only delete their own.
+function canDeleteBulletinComment(comment) {
+  return !!state.employee?.isManager || comment.authorId === state.employee?.id;
+}
+async function deleteBulletinComment(postId, commentId) {
+  if (!postId || !commentId) return;
+  await db.collection('bulletinPosts').doc(postId).collection('comments').doc(commentId).delete();
 }
 
 // ============================================================================
@@ -823,6 +885,7 @@ const ICONS = {
   camera: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2"><path d="M3 9a2 2 0 0 1 2-2h1.5l1-1.5h9l1 1.5H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><circle cx="12" cy="13" r="3.5"/></svg>`,
   pin: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 17v5M9 3h6l1 6 3 2v2H5v-2l3-2Z"/></svg>`,
   clock: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>`,
+  comment: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5Z"/></svg>`,
   vacuum: `<span style="font-size:1em;line-height:1;">🧹</span>`,
 };
 
@@ -1620,16 +1683,19 @@ function renderBulletinTab() {
   `;
 }
 const PIN_ICON_SMALL = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 17v5M9 3h6l1 6 3 2v2H5v-2l3-2Z"/></svg>`;
+// The whole row opens the full post (with its comment thread) in the detail
+// modal — that's also what makes a long, clamped post "expandable," since
+// there's no separate expand/collapse control on the row itself.
 function renderBulletinRow(p, divider) {
   const canDelete = canDeleteBulletinPost(p);
   const isManager = !!state.employee?.isManager;
   return `
-    <div style="padding:14px 16px;${divider?'border-bottom:1px solid var(--border);':''}">
+    <div data-open-bulletin="${p.id}" style="padding:14px 16px;cursor:pointer;${divider?'border-bottom:1px solid var(--border);':''}">
       ${p.isPinned ? `<div style="display:flex;align-items:center;gap:4px;color:var(--orange);font-size:11px;font-weight:700;margin-bottom:4px;">${PIN_ICON_SMALL}<span>Pinned</span></div>` : ''}
-      <div style="font-size:14px;white-space:pre-wrap;line-height:1.4;">${escapeHtml(p.message)}</div>
+      <div style="font-size:14px;white-space:pre-wrap;line-height:1.4;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;">${escapeHtml(p.message)}</div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
-        <div style="color:var(--text-secondary);font-size:12px;">
-          <span style="font-weight:600;">${escapeHtml(p.authorName)}</span> · ${timeAgo(p.createdAt)}
+        <div style="color:var(--text-secondary);font-size:12px;display:flex;align-items:center;gap:6px;">
+          <span style="font-weight:600;">${escapeHtml(p.authorName)}</span> · ${timeAgo(p.createdAt)} · <span style="display:flex;align-items:center;gap:3px;">${ICONS.comment||''}Comment</span>
         </div>
         <div style="display:flex;gap:14px;">
           ${isManager ? `<button data-pin-bulletin="${p.id}" data-pinned="${!!p.isPinned}" style="background:none;border:none;color:var(--orange);font-size:12px;font-weight:600;padding:0;cursor:pointer;">${p.isPinned ? 'Unpin' : 'Pin'}</button>` : ''}
@@ -1646,11 +1712,22 @@ function attachBulletinHandlers() {
     state.modals.bulletinForm = { message: '', pinned: false };
     render();
   });
-  document.querySelectorAll('[data-delete-bulletin]').forEach(el => el.addEventListener('click', () => {
+  document.querySelectorAll('[data-open-bulletin]').forEach(el => el.addEventListener('click', () => {
+    const id = el.dataset.openBulletin;
+    const post = state.bulletinPosts.find(p => p.id === id);
+    if (!post) return;
+    state.modals.bulletinDetail = post;
+    state.modals.commentDraft = '';
+    startListeningToComments(id);
+    render();
+  }));
+  document.querySelectorAll('[data-delete-bulletin]').forEach(el => el.addEventListener('click', (ev) => {
+    ev.stopPropagation();
     const id = el.dataset.deleteBulletin;
     showConfirm({ title: 'Delete Post?', message: 'This removes it from the Bulletin Board for everyone.', confirmLabel: 'Delete', danger: true, onConfirm: () => deleteBulletinPost(id) });
   }));
-  document.querySelectorAll('[data-pin-bulletin]').forEach(el => el.addEventListener('click', () => {
+  document.querySelectorAll('[data-pin-bulletin]').forEach(el => el.addEventListener('click', (ev) => {
+    ev.stopPropagation();
     const id = el.dataset.pinBulletin;
     const currentlyPinned = el.dataset.pinned === 'true';
     setBulletinPostPinned(id, !currentlyPinned);
@@ -1694,6 +1771,74 @@ function attachBulletinComposerHandlers() {
     await postBulletin(message, pinned);
     render();
   });
+}
+
+// ============================================================================
+// BULLETIN POST DETAIL (full post + comment thread)
+// ============================================================================
+// Opened by tapping a post in the feed. Shows the complete message (the feed
+// itself clamps long posts to 4 lines) plus a comment thread anyone can add
+// to. The comment listener is started when this modal opens
+// (attachBulletinHandlers' data-open-bulletin handler) and stopped when it
+// closes, since comments are only ever watched for whichever one post is
+// currently open here.
+function renderBulletinDetailModal() {
+  const p = state.modals.bulletinDetail;
+  if (!p) return '';
+  const comments = state.bulletinComments;
+  const draft = state.modals.commentDraft || '';
+  const commentsHtml = comments.length ? comments.map(c => `
+    <div data-comment-id="${c.id}" style="display:flex;gap:8px;padding:10px 0;border-bottom:1px solid var(--border);">
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;white-space:pre-wrap;line-height:1.4;">${escapeHtml(c.message)}</div>
+        <div style="color:var(--text-secondary);font-size:11px;margin-top:4px;">
+          <span style="font-weight:600;">${escapeHtml(c.authorName)}</span> · ${timeAgo(c.createdAt)}
+        </div>
+      </div>
+      ${canDeleteBulletinComment(c) ? `<button data-delete-comment="${c.id}" style="background:none;border:none;color:var(--text-tertiary);cursor:pointer;padding:0;align-self:flex-start;">${ICONS.trash||'&times;'}</button>` : ''}
+    </div>
+  `).join('') : `<p style="color:var(--text-tertiary);font-size:13px;text-align:center;padding:16px 0;margin:0;">No comments yet.</p>`;
+  return modalWrap('Post', `
+    <div style="margin-bottom:14px;">
+      ${p.isPinned ? `<div style="display:flex;align-items:center;gap:4px;color:var(--orange);font-size:11px;font-weight:700;margin-bottom:4px;">${PIN_ICON_SMALL}<span>Pinned</span></div>` : ''}
+      <div style="font-size:14px;white-space:pre-wrap;line-height:1.4;">${escapeHtml(p.message)}</div>
+      <div style="color:var(--text-secondary);font-size:12px;margin-top:8px;">
+        <span style="font-weight:600;">${escapeHtml(p.authorName)}</span> · ${timeAgo(p.createdAt)}
+      </div>
+    </div>
+    <div style="border-top:1px solid var(--border);padding-top:10px;max-height:280px;overflow-y:auto;">${commentsHtml}</div>
+  `, `
+    <input class="input" id="bltn-comment-input" placeholder="Add a comment..." value="${escapeHtml(draft)}" style="flex:1;" />
+    <button class="btn btn-primary" id="bltn-comment-send" ${!draft.trim() ? 'disabled' : ''}>Send</button>
+  `, 'bltn-detail-close');
+}
+function attachBulletinDetailModalHandlers() {
+  const close = () => {
+    state.modals.bulletinDetail = null;
+    state.modals.commentDraft = '';
+    stopListeningToComments();
+    render();
+  };
+  document.getElementById('bltn-detail-close')?.addEventListener('click', close);
+  document.getElementById('bltn-comment-input')?.addEventListener('input', (e) => {
+    state.modals.commentDraft = e.target.value;
+    const sendBtn = document.getElementById('bltn-comment-send');
+    if (sendBtn) sendBtn.disabled = !e.target.value.trim();
+  });
+  document.getElementById('bltn-comment-send')?.addEventListener('click', async () => {
+    const postId = state.modals.bulletinDetail?.id;
+    const message = state.modals.commentDraft || '';
+    if (!postId || !message.trim()) return;
+    state.modals.commentDraft = '';
+    await postBulletinComment(postId, message);
+    render();
+  });
+  document.querySelectorAll('[data-delete-comment]').forEach(el => el.addEventListener('click', () => {
+    const postId = state.modals.bulletinDetail?.id;
+    const commentId = el.dataset.deleteComment;
+    if (!postId || !commentId) return;
+    showConfirm({ title: 'Delete Comment?', message: 'This removes the comment for everyone.', confirmLabel: 'Delete', danger: true, onConfirm: () => deleteBulletinComment(postId, commentId) });
+  }));
 }
 
 // ============================================================================
@@ -2112,6 +2257,7 @@ function renderModals() {
   if (m.timeOffDetail) html += renderTimeOffDetailModal();
   if (m.colorLegend) html += renderColorLegendModal();
   if (m.bulletinComposer) html += renderBulletinComposerModal();
+  if (m.bulletinDetail) html += renderBulletinDetailModal();
   if (m.availabilityEditor) html += renderAvailabilityEditorModal();
   if (m.confirm) html += renderConfirmModal();
   if (m.alert) html += renderAlertModal();
@@ -2653,6 +2799,7 @@ function attachModalHandlers() {
   if (state.modals.timeOffDetail) attachTimeOffDetailHandlers();
   if (state.modals.colorLegend) attachColorLegendHandlers();
   if (state.modals.bulletinComposer) attachBulletinComposerHandlers();
+  if (state.modals.bulletinDetail) attachBulletinDetailModalHandlers();
   if (state.modals.availabilityEditor) attachAvailabilityEditorModalHandlers();
   if (state.modals.confirm) attachConfirmHandlers();
   if (state.modals.alert) attachAlertHandlers();
